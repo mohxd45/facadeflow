@@ -68,3 +68,7 @@ src/
 - **Tailwind CSS 4**
 
 No database or AI integration yet — frontend structure and navigation only.
+
+## Deployment Notes
+
+- Auto-deploy verification heartbeat commit: 2026-06-21.
