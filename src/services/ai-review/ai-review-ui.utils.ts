@@ -5,6 +5,7 @@ import type {
   AiReviewRiskLevel,
   AiReviewSuggestedAction,
 } from "@/types/ai-review";
+import { CLARIFICATION_FINDING_TYPES } from "@/services/ai-review/ai-review-action.service";
 
 export const AI_REVIEW_ADVISORY_TEXT =
   "AI Review is advisory only. It does not change quantities or mark items final. Estimator approval is required.";
@@ -55,6 +56,10 @@ export interface AiReviewActionAvailability {
   canSendToMissingInfo: boolean;
   canMarkNeedsVerification: boolean;
   canRejectCandidate: boolean;
+  /** True for package-level findings of clarification-worthy types */
+  canCreateClarification: boolean;
+  /** Human-readable reason when the primary action is disabled */
+  reasonDisabled?: string;
 }
 
 export type RejectExecutionResult = "rejected" | "cancelled" | "unavailable";
@@ -183,17 +188,48 @@ export function toAiReviewRows(findings: AiReviewFinding[]): AiReviewFindingRow[
     });
 }
 
+// Finding types that support "Send to Missing Info" from a candidate
+const SEND_TO_MISSING_INFO_TYPES = new Set<AiReviewFindingType>([
+  "missing_information",
+  "generic_code",
+  "source_conflict",
+  "suspicious_dimension",
+  "ocr_uncertain",
+  "needs_schedule",
+  "needs_elevation",
+  "needs_section",
+  "manual_verification_required",
+]);
+
 export function getAiReviewActionAvailability(
   row: Pick<AiReviewFindingRow, "candidateId" | "findingType">
 ): AiReviewActionAvailability {
   const hasCandidate = Boolean(row.candidateId);
+  const isPackageLevel = !hasCandidate;
+
+  // Safe findings: view only, no modification
+  const isSafeFinding = row.findingType === "quantity_safe";
+
+  // Clarification is for package-level findings of clarification-worthy types,
+  // OR candidate findings that are of those types (second path for clarification)
+  const canCreateClarification =
+    CLARIFICATION_FINDING_TYPES.has(row.findingType) &&
+    (isPackageLevel || hasCandidate);
+
+  let reasonDisabled: string | undefined;
+  if (isPackageLevel) {
+    reasonDisabled = "Package-level finding — not linked to a specific candidate.";
+  } else if (isSafeFinding) {
+    reasonDisabled = "Safe quantity — no modification action needed. View candidate manually.";
+  }
+
   return {
     canViewCandidate: hasCandidate,
-    canSendToMissingInfo:
-      hasCandidate &&
-      (row.findingType === "missing_information" || row.findingType === "generic_code"),
-    canMarkNeedsVerification: hasCandidate,
-    canRejectCandidate: hasCandidate,
+    canSendToMissingInfo: hasCandidate && SEND_TO_MISSING_INFO_TYPES.has(row.findingType),
+    canMarkNeedsVerification: hasCandidate && !isSafeFinding,
+    canRejectCandidate: hasCandidate && !isSafeFinding,
+    canCreateClarification,
+    reasonDisabled,
   };
 }
 

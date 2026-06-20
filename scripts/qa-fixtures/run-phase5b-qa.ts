@@ -284,10 +284,10 @@ function run() {
     sectionSource.includes("window.confirm")
   );
   check(
-    "5B-13: phase-5D fallback text exists",
-    "contains 'Actions coming in Phase 5D.'",
-    sectionSource.includes("Actions coming in Phase 5D.") ? "present" : "missing",
-    sectionSource.includes("Actions coming in Phase 5D.")
+    "5B-13: phase-5D workflow actions are implemented (WorkflowCell exists)",
+    "contains 'WorkflowCell'",
+    sectionSource.includes("WorkflowCell") ? "present" : "missing",
+    sectionSource.includes("WorkflowCell")
   );
 
   check(
@@ -357,15 +357,18 @@ function run() {
     rejectPackageLevel === "unavailable" && rejectCalls === 1
   );
 
+  // Phase 5D: safe quantity findings (quantity_safe) are view-only — no reject allowed.
+  // The estimator must manually review them; they don't need rejection.
   const candidateAvailability = getAiReviewActionAvailability({
     candidateId: "cand-safe",
     findingType: "quantity_safe",
   });
   check(
-    "5B-13h: candidate finding has reject action available",
-    "canRejectCandidate=true",
-    String(candidateAvailability.canRejectCandidate),
-    candidateAvailability.canRejectCandidate === true
+    "5B-13h: safe quantity finding has canViewCandidate=true but canRejectCandidate=false (Phase 5D)",
+    "canViewCandidate=true canRejectCandidate=false",
+    `canViewCandidate=${candidateAvailability.canViewCandidate} canRejectCandidate=${candidateAvailability.canRejectCandidate}`,
+    candidateAvailability.canViewCandidate === true &&
+      candidateAvailability.canRejectCandidate === false
   );
   const packageAvailability = getAiReviewActionAvailability({
     candidateId: undefined,

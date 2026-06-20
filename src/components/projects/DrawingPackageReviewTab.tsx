@@ -96,6 +96,12 @@ import DrawingTakeoffReviewTable from "@/components/drawing-takeoff/DrawingTakeo
 import ZipPackageUploadPanel from "@/components/projects/ZipPackageUploadPanel";
 import { runAiReviewViaGateway } from "@/services/ai-review/ai-review-gateway.service";
 import { detectItemCodesInText } from "@/services/ai-review/ai-review-prompt-builder.service";
+import {
+  buildMissingInfoInputFromFinding,
+  isMissingInfoDuplicate,
+  buildClarificationDraft,
+  CLARIFICATION_FINDING_TYPES,
+} from "@/services/ai-review/ai-review-action.service";
 import type { AiReviewDxfDrawingSummary } from "@/types/ai-review";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -2377,32 +2383,85 @@ export default function DrawingPackageReviewTab({
     });
   }, [getCrossDrawingCandidateById]);
 
+  /**
+   * Send a specific AI finding to Missing Info.
+   * Uses the finding data (not just the candidate) to build a targeted issue.
+   * Deduplicates against existing open issues by itemCode + issueType.
+   * Returns RowFeedback for per-row display in AiReviewSection.
+   */
   const handleAiSendToMissingInfo = useCallback(
-    async (candidateId: string) => {
-      const candidate = getCrossDrawingCandidateById(candidateId);
-      if (!candidate) {
-        setAiReviewError(
-          "Candidate not found in current Cross-Drawing result. Rebuild and re-run AI Review."
-        );
-        return;
+    async (
+      findingId: string,
+      candidateId: string | undefined
+    ): Promise<{ kind: "success" | "warning" | "error"; message: string }> => {
+      const finding = projectAiReviewResult?.findings.find((f) => f.id === findingId);
+      if (!finding) {
+        return {
+          kind: "error",
+          message:
+            "Finding not found in current AI Review result. Re-run AI Review to refresh.",
+        };
       }
-      await handleCrossDrawingSendToIssues([candidate]);
-      setActiveSection("issues");
+
+      const candidateItemCode = candidateId
+        ? getCrossDrawingCandidateById(candidateId)?.itemCode
+        : undefined;
+
+      // Dedup check
+      if (isMissingInfoDuplicate(finding, projectIssues, candidateItemCode)) {
+        return {
+          kind: "warning",
+          message: "Duplicate issue already exists in Missing Info.",
+        };
+      }
+
+      const issueInput = buildMissingInfoInputFromFinding(
+        finding,
+        projectId,
+        candidateItemCode
+      );
+
+      try {
+        await addIssues([issueInput]);
+        return { kind: "success", message: "Missing Info issue created from AI Review." };
+      } catch {
+        return { kind: "error", message: "Failed to create Missing Info issue." };
+      }
     },
-    [getCrossDrawingCandidateById, handleCrossDrawingSendToIssues]
+    [
+      addIssues,
+      getCrossDrawingCandidateById,
+      projectAiReviewResult,
+      projectId,
+      projectIssues,
+    ]
   );
 
+  /**
+   * Mark a candidate as needs_verification from an AI finding.
+   * Returns RowFeedback for per-row display.
+   */
   const handleAiMarkNeedsVerification = useCallback(
-    async (candidateId: string) => {
+    async (
+      candidateId: string
+    ): Promise<{ kind: "success" | "warning" | "error"; message: string }> => {
       const candidate = getCrossDrawingCandidateById(candidateId);
       if (!candidate) {
-        setAiReviewError(
-          "Candidate not found in current Cross-Drawing result. Rebuild and re-run AI Review."
-        );
-        return;
+        return {
+          kind: "error",
+          message:
+            "Candidate not found in current Cross-Drawing result. Rebuild and re-run AI Review.",
+        };
       }
-      await handleCrossDrawingSaveNeedsVerification([candidate]);
-      setActiveSection("quantities");
+      try {
+        await handleCrossDrawingSaveNeedsVerification([candidate]);
+        return {
+          kind: "success",
+          message: `Candidate ${candidate.itemCode} marked Needs Verification.`,
+        };
+      } catch {
+        return { kind: "error", message: "Failed to mark candidate." };
+      }
     },
     [getCrossDrawingCandidateById, handleCrossDrawingSaveNeedsVerification]
   );
@@ -2420,6 +2479,67 @@ export default function DrawingPackageReviewTab({
       setActiveSection("crossDrawing");
     },
     [getCrossDrawingCandidateById, handleCrossDrawingReject]
+  );
+
+  /**
+   * Create a clarification / RFI draft issue from an AI finding.
+   * Works for both package-level and candidate-linked findings.
+   * Deduplicates against existing open issues by finding id.
+   * Returns RowFeedback for per-row display.
+   */
+  const handleAiCreateClarification = useCallback(
+    async (
+      findingId: string
+    ): Promise<{ kind: "success" | "warning" | "error"; message: string }> => {
+      const finding = projectAiReviewResult?.findings.find((f) => f.id === findingId);
+      if (!finding) {
+        return {
+          kind: "error",
+          message:
+            "Finding not found in current AI Review result. Re-run AI Review to refresh.",
+        };
+      }
+
+      if (!CLARIFICATION_FINDING_TYPES.has(finding.findingType)) {
+        return {
+          kind: "warning",
+          message: "This finding type does not support clarification drafts.",
+        };
+      }
+
+      // Dedup: skip if an open issue already references this finding id
+      const alreadyExists = projectIssues.some(
+        (issue) =>
+          issue.status === "open" && issue.manualNotes?.includes(finding.id)
+      );
+      if (alreadyExists) {
+        return {
+          kind: "warning",
+          message: "A clarification draft for this finding already exists in Missing Info.",
+        };
+      }
+
+      // Build the draft summary (advisory metadata only)
+      const draft = buildClarificationDraft(finding);
+
+      // Persist as a DrawingIssueItem so it surfaces in Missing Info
+      const issueInput = buildMissingInfoInputFromFinding(
+        finding,
+        projectId,
+        draft.affectedItemCode || undefined
+      );
+
+      try {
+        await addIssues([issueInput]);
+        return {
+          kind: "success",
+          message: `Clarification draft created for "${finding.title}". View in Missing Info.`,
+        };
+      } catch {
+        return { kind: "error", message: "Failed to create clarification draft." };
+      }
+    },
+    [addIssues, projectAiReviewResult, projectId, projectIssues]
   );
 
   const handleLoadAiReviewQaScenario = useCallback(() => {
@@ -2932,6 +3052,7 @@ export default function DrawingPackageReviewTab({
           onSendToMissingInfo={handleAiSendToMissingInfo}
           onMarkNeedsVerification={handleAiMarkNeedsVerification}
           onRejectCandidate={handleAiRejectCandidate}
+          onCreateClarification={handleAiCreateClarification}
           onLoadQaScenario={handleLoadAiReviewQaScenario}
           showQaScenarioButton={process.env.NODE_ENV !== "production"}
         />
