@@ -2319,16 +2319,22 @@ export default function DrawingPackageReviewTab({
       const gatewayResult = await runAiReviewViaGateway(input);
       saveAiReviewResult(gatewayResult.result);
 
+      const runtimeMeta = gatewayResult.result.runtimeMeta;
       const sourceLabel =
-        gatewayResult.source === "openai"
-          ? " (OpenAI)"
-          : gatewayResult.source === "mock"
-            ? " (mock)"
-            : " (mock fallback)";
+        runtimeMeta?.source === "openai"
+          ? "OpenAI"
+          : runtimeMeta?.source === "mock"
+            ? "mock"
+            : "mock fallback";
+      const modelLabel = runtimeMeta?.modelUsed ?? "unknown-model";
+      const fallbackLabel = runtimeMeta?.fallbackUsed ? "yes" : "no";
 
       setAiReviewFeedback({
-        kind: gatewayResult.source === "mock_fallback" ? "warning" : "success",
-        message: `AI Review completed${sourceLabel} with ${gatewayResult.result.findings.length} finding(s).`,
+        kind:
+          runtimeMeta?.source === "mock_fallback" || gatewayResult.source === "mock_fallback"
+            ? "warning"
+            : "success",
+        message: `AI Review completed (source=${sourceLabel}, model=${modelLabel}, fallback=${fallbackLabel}) with ${gatewayResult.result.findings.length} finding(s).`,
       });
       setActiveSection("aiReview");
     } catch (err) {

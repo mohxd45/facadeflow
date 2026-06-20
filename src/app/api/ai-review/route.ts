@@ -31,7 +31,7 @@ function getServerEnv() {
   return {
     provider: process.env.AI_REVIEW_PROVIDER ?? "mock",
     apiKey: process.env.OPENAI_API_KEY ?? "",
-    model: process.env.AI_REVIEW_MODEL ?? "gpt-4o",
+    model: process.env.AI_REVIEW_MODEL ?? "gpt-5-mini",
     timeoutMs: parseInt(process.env.AI_REVIEW_TIMEOUT_MS ?? "30000", 10),
     maxInputChars: parseInt(
       process.env.AI_REVIEW_MAX_INPUT_CHARS ?? String(DEFAULT_MAX_INPUT_CHARS),
@@ -71,7 +71,8 @@ async function callOpenAi(
           { role: "user", content: userPrompt },
         ],
         temperature: 0,
-        max_tokens: 4096,
+        // GPT-5 family expects max_completion_tokens (not max_tokens).
+        max_completion_tokens: 4096,
       }),
     });
   } finally {
@@ -121,12 +122,14 @@ function parseLlmResponse(
     throw new Error("LLM returned non-JSON response");
   }
 
-  const summary =
-    typeof parsed.summary === "string" && parsed.summary.trim()
-      ? parsed.summary.trim()
-      : "AI review completed.";
-
-  const rawFindings = Array.isArray(parsed.findings) ? parsed.findings : [];
+  if (typeof parsed.summary !== "string" || parsed.summary.trim().length === 0) {
+    throw new Error("LLM response missing required 'summary' string");
+  }
+  if (!Array.isArray(parsed.findings)) {
+    throw new Error("LLM response missing required 'findings' array");
+  }
+  const summary = parsed.summary.trim();
+  const rawFindings = parsed.findings;
   const rawWarnings = Array.isArray(parsed.warnings)
     ? parsed.warnings.filter((w): w is string => typeof w === "string")
     : [];
@@ -142,17 +145,28 @@ function parseLlmResponse(
       : null;
     if (!findingType) continue;
 
-    const riskLevel = typeof r.riskLevel === "string" && VALID_RISK_LEVELS.has(r.riskLevel)
-      ? r.riskLevel
-      : "medium";
+    const riskLevel =
+      typeof r.riskLevel === "string" && VALID_RISK_LEVELS.has(r.riskLevel)
+        ? r.riskLevel
+        : null;
 
-    const suggestedAction = typeof r.suggestedAction === "string" && VALID_ACTIONS.has(r.suggestedAction)
-      ? r.suggestedAction
-      : "request_manual_check";
+    const suggestedAction =
+      typeof r.suggestedAction === "string" && VALID_ACTIONS.has(r.suggestedAction)
+        ? r.suggestedAction
+        : null;
 
-    const confidence = typeof r.confidence === "string" && VALID_CONFIDENCE.has(r.confidence)
-      ? r.confidence
-      : "medium";
+    const confidence =
+      typeof r.confidence === "string" && VALID_CONFIDENCE.has(r.confidence)
+        ? r.confidence
+        : null;
+
+    const title = typeof r.title === "string" ? r.title.trim() : "";
+    const message = typeof r.message === "string" ? r.message.trim() : "";
+    const recommendation =
+      typeof r.recommendation === "string" ? r.recommendation.trim() : "";
+
+    if (!riskLevel || !suggestedAction || !confidence) continue;
+    if (!title || !message || !recommendation) continue;
 
     const candidateId = typeof r.candidateId === "string" && candidateIds.has(r.candidateId)
       ? r.candidateId
@@ -166,20 +180,26 @@ function parseLlmResponse(
       normalizedItemCode: typeof r.normalizedItemCode === "string" ? r.normalizedItemCode : undefined,
       findingType: findingType as AiReviewFinding["findingType"],
       riskLevel: riskLevel as AiReviewFinding["riskLevel"],
-      title: typeof r.title === "string" ? r.title.slice(0, 120) : "Finding",
-      message: typeof r.message === "string" ? r.message.slice(0, 500) : "",
-      recommendation: typeof r.recommendation === "string" ? r.recommendation.slice(0, 300) : "",
+      title: title.slice(0, 120),
+      message: message.slice(0, 500),
+      recommendation: recommendation.slice(0, 300),
       linkedEvidenceIds: Array.isArray(r.linkedEvidenceIds)
         ? r.linkedEvidenceIds.filter((e): e is string => typeof e === "string")
         : [],
       sourceDrawingNames: Array.isArray(r.sourceDrawingNames)
         ? r.sourceDrawingNames.filter((s): s is string => typeof s === "string")
         : [],
-      sourcePages: [],
+      sourcePages: Array.isArray(r.sourcePages)
+        ? r.sourcePages.filter((p): p is number => typeof p === "number")
+        : [],
       suggestedAction: suggestedAction as AiReviewFinding["suggestedAction"],
       confidence: confidence as AiReviewFinding["confidence"],
       createdAt: now,
     });
+  }
+
+  if (rawFindings.length > 0 && findings.length === 0) {
+    throw new Error("LLM response findings failed strict validation");
   }
 
   const reviewedCandidateIds = findings
@@ -222,6 +242,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!useOpenAi) {
     const result = runMockAiDrawingReview(input);
+    result.runtimeMeta = {
+      source: "mock",
+      modelUsed: model,
+      fallbackUsed: false,
+    };
     return NextResponse.json(result);
   }
 
@@ -235,12 +260,22 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const rawResponse = await callOpenAi(systemPrompt, userPrompt, model, apiKey, timeoutMs);
     const result = parseLlmResponse(rawResponse, input.projectId, candidateIds);
+    result.runtimeMeta = {
+      source: "openai",
+      modelUsed: model,
+      fallbackUsed: false,
+    };
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown AI error";
     // On failure, fall back to mock and include a warning
     const fallback = runMockAiDrawingReview(input);
     fallback.warnings.unshift(`Real AI call failed (${message}). Showing mock results.`);
+    fallback.runtimeMeta = {
+      source: "mock_fallback",
+      modelUsed: model,
+      fallbackUsed: true,
+    };
     return NextResponse.json(fallback);
   }
 }

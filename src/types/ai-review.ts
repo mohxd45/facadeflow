@@ -113,6 +113,16 @@ export interface AiReviewResult {
   /** Package-level warnings that do not belong to a specific candidate */
   warnings: string[];
 
+  /**
+   * Runtime metadata for model/provider transparency.
+   * Contains no secrets and is safe to return to client UI.
+   */
+  runtimeMeta?: {
+    source: "openai" | "mock" | "mock_fallback";
+    modelUsed: string;
+    fallbackUsed: boolean;
+  };
+
   createdAt: string;
   updatedAt: string;
 }

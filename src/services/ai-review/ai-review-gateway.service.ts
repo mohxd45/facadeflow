@@ -13,7 +13,7 @@ import type { AiReviewResult, AiReviewRunInput } from "@/types/ai-review";
 import { runMockAiDrawingReview } from "@/services/ai-review/ai-drawing-review.service";
 
 export type AiReviewGatewayResult =
-  | { source: "openai" | "mock"; result: AiReviewResult; error: null }
+  | { source: "openai" | "mock" | "mock_fallback"; result: AiReviewResult; error: null }
   | { source: "mock_fallback"; result: AiReviewResult; error: string };
 
 /**
@@ -41,18 +41,16 @@ export async function runAiReviewViaGateway(
     if (
       typeof result?.id !== "string" ||
       typeof result?.projectId !== "string" ||
-      !Array.isArray(result?.findings)
+      !Array.isArray(result?.findings) ||
+      typeof result?.runtimeMeta?.source !== "string" ||
+      typeof result?.runtimeMeta?.modelUsed !== "string" ||
+      typeof result?.runtimeMeta?.fallbackUsed !== "boolean"
     ) {
       throw new Error("API route returned unexpected response shape");
     }
 
-    // Determine actual source from presence of warning prefix added on fallback
-    const usedFallback = result.warnings?.some(w =>
-      w.startsWith("Real AI call failed")
-    );
-
     return {
-      source: usedFallback ? "mock" : "openai",
+      source: result.runtimeMeta.source,
       result,
       error: null,
     };
@@ -65,6 +63,11 @@ export async function runAiReviewViaGateway(
     fallback.warnings.unshift(
       `AI gateway unavailable (${errorMessage}). Showing mock results.`
     );
+    fallback.runtimeMeta = {
+      source: "mock_fallback",
+      modelUsed: "gateway-local-mock",
+      fallbackUsed: true,
+    };
     return {
       source: "mock_fallback",
       result: fallback,
