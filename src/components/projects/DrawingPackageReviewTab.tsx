@@ -91,9 +91,12 @@ import { useDrawingIssueStore } from "@/stores/drawing-issue-store";
 import { useOcrResultStore } from "@/stores/ocr-result-store";
 import { useCompanyStore } from "@/stores/company-store";
 import { useAiReviewStore } from "@/stores/ai-review-store";
+import { useLayerMappingStore } from "@/stores/layer-mapping-store";
 import DrawingTakeoffReviewTable from "@/components/drawing-takeoff/DrawingTakeoffReviewTable";
 import ZipPackageUploadPanel from "@/components/projects/ZipPackageUploadPanel";
-import { runMockAiDrawingReview } from "@/services/ai-review/ai-drawing-review.service";
+import { runAiReviewViaGateway } from "@/services/ai-review/ai-review-gateway.service";
+import { detectItemCodesInText } from "@/services/ai-review/ai-review-prompt-builder.service";
+import type { AiReviewDxfDrawingSummary } from "@/types/ai-review";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -1377,6 +1380,7 @@ export default function DrawingPackageReviewTab({
   const aiReviewIsHydrated = useAiReviewStore((s) => s.isHydrated);
   const hydrateAiReview = useAiReviewStore((s) => s.hydrate);
   const saveAiReviewResult = useAiReviewStore((s) => s.saveResult);
+  const allLayerMappings = useLayerMappingStore((s) => s.mappings);
 
   const projectOcrResults = useMemo(
     () => allOcrResults.filter((r) => r.projectId === projectId),
@@ -2189,7 +2193,7 @@ export default function DrawingPackageReviewTab({
     [crossDrawingResult]
   );
 
-  const handleRunAiReview = useCallback(() => {
+  const handleRunAiReview = useCallback(async () => {
     if (analysis.status !== "done") {
       setAiReviewError(
         "Run Package Analysis first so AI Review has drawing evidence to review."
@@ -2259,6 +2263,44 @@ export default function DrawingPackageReviewTab({
         return acc;
       }, {});
 
+      // ── Compact DXF evidence from layer mapping store — Phase 5C ──────────
+      // No raw DXF bytes are sent. Only structured metadata (layer names,
+      // entity counts, detected item codes from existing evidence text).
+      const dxfDrawings = drawings.filter(
+        (d) => d.fileType === "dxf" || d.fileType === "dwg"
+      );
+      const dxfEvidence: AiReviewDxfDrawingSummary[] = dxfDrawings.map((d) => {
+        const projectMappings = allLayerMappings.filter(
+          (m) => m.projectId === projectId && m.layerName
+        );
+        const layers = projectMappings.map((m) => ({
+          name: m.layerName,
+          entityCount: m.entityCount ?? 0,
+        }));
+        // Collect text labels from analysis evidence that came from this drawing
+        const evidenceForDrawing = analysis.evidence.filter(
+          (ev) => ev.drawingId === d.id
+        );
+        const rawLabels = evidenceForDrawing.flatMap(
+          (ev) => ev.candidates.map((c) => c.rawSnippet ?? "")
+        );
+        const textLabels = rawLabels
+          .filter((l) => l.trim().length > 0)
+          .slice(0, 40);
+        const detectedItemCodes = detectItemCodesInText(textLabels);
+        return {
+          drawingId: d.id,
+          drawingName: d.fileName,
+          units: "drawing_units",
+          layers,
+          blockNames: [],
+          textLabels,
+          detectedItemCodes,
+          warnings: [],
+          totalEntityCount: layers.reduce((sum, l) => sum + l.entityCount, 0),
+        };
+      }).filter((s) => s.layers.length > 0 || s.textLabels.length > 0);
+
       const input: AiReviewRunInput = {
         projectId,
         packageAnalysisResult: {
@@ -2271,13 +2313,22 @@ export default function DrawingPackageReviewTab({
         missingInfoItems,
         failedDrawingDiagnostics,
         ocrResults: ocrByDrawing,
+        dxfEvidence: dxfEvidence.length > 0 ? dxfEvidence : undefined,
       };
 
-      const result = runMockAiDrawingReview(input);
-      saveAiReviewResult(result);
+      const gatewayResult = await runAiReviewViaGateway(input);
+      saveAiReviewResult(gatewayResult.result);
+
+      const sourceLabel =
+        gatewayResult.source === "openai"
+          ? " (OpenAI)"
+          : gatewayResult.source === "mock"
+            ? " (mock)"
+            : " (mock fallback)";
+
       setAiReviewFeedback({
-        kind: "success",
-        message: `AI Review completed with ${result.findings.length} finding(s).`,
+        kind: gatewayResult.source === "mock_fallback" ? "warning" : "success",
+        message: `AI Review completed${sourceLabel} with ${gatewayResult.result.findings.length} finding(s).`,
       });
       setActiveSection("aiReview");
     } catch (err) {
@@ -2294,6 +2345,7 @@ export default function DrawingPackageReviewTab({
       setIsRunningAiReview(false);
     }
   }, [
+    allLayerMappings,
     analysis,
     crossDrawingResult,
     drawings,

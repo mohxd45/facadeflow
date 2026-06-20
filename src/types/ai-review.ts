@@ -128,6 +128,28 @@ export interface FailedDrawingDiagnostic {
   suggestion?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Compact CAD/DXF evidence — Phase 5C
+// Only structured metadata is included. Raw DXF/DWG files are never sent.
+// ---------------------------------------------------------------------------
+
+export interface AiReviewDxfDrawingSummary {
+  drawingId: string;
+  drawingName: string;
+  units: string;
+  /** Layer names and entity counts — no geometry */
+  layers: Array<{ name: string; entityCount: number }>;
+  /** Block names defined in the drawing */
+  blockNames: string[];
+  /** Unique text labels extracted from TEXT/MTEXT entities */
+  textLabels: string[];
+  /** Item codes detected in text labels by pattern matching */
+  detectedItemCodes: string[];
+  /** Parser-level warnings */
+  warnings: string[];
+  totalEntityCount: number;
+}
+
 export interface AiReviewRunInput {
   projectId: string;
 
@@ -155,4 +177,11 @@ export interface AiReviewRunInput {
 
   /** OCR results keyed by drawingId */
   ocrResults?: Record<string, { confidence?: number; hasText?: boolean }>;
+
+  /**
+   * Compact structured summaries of parsed DXF/CAD drawings — Phase 5C.
+   * Contains layer names, block names, text labels, and detected item codes.
+   * Raw DXF/DWG file bytes are NEVER included here.
+   */
+  dxfEvidence?: AiReviewDxfDrawingSummary[];
 }
