@@ -70,7 +70,7 @@ async function callOpenAi(
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        temperature: 0,
+        // GPT-5-mini enforces default temperature; omit explicit override.
         // GPT-5 family expects max_completion_tokens (not max_tokens).
         max_completion_tokens: 4096,
       }),
