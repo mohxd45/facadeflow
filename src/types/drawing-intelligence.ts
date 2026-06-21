@@ -277,6 +277,85 @@ export interface ReconciliationInput {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 6B: Visual evidence pipeline
+// ---------------------------------------------------------------------------
+
+/**
+ * Render status for one drawing page/view prepared for AI Vision.
+ * This is a pipeline status only (not a quantity/business status).
+ */
+export type VisualEvidenceRenderStatus = "ready" | "skipped" | "failed";
+
+/** Which adapter produced this rendered page/view. */
+export type VisualEvidenceAdapterKind = "pdf" | "dxf" | "dwg";
+
+/** Rendered image metadata (safe for AI vision input). */
+export interface VisualEvidenceImageMeta {
+  mimeType: "image/jpeg" | "image/png" | "image/webp";
+  width: number;
+  height: number;
+  /**
+   * Approximate encoded payload bytes.
+   * Used only for sizing/guardrails, never for business logic.
+   */
+  approxBytes: number;
+  quality: number;
+}
+
+/**
+ * One rendered page/view prepared for AI visual review.
+ * Raw PDF/DXF/DWG binary is never stored here.
+ */
+export interface DrawingVisualEvidence {
+  id: string;
+  projectId: string;
+  sourceDrawingId: string;
+  sourceDrawingName: string;
+  sourceFileType: "pdf" | "dxf" | "dwg";
+  adapterKind: VisualEvidenceAdapterKind;
+  sheet: DrawingSheetRef;
+  imageDataUrl: string;
+  image: VisualEvidenceImageMeta;
+  renderStatus: VisualEvidenceRenderStatus;
+  warnings: string[];
+  errorMessage?: string;
+  createdAt: string;
+}
+
+/** A failed/skipped rendering attempt with traceable context. */
+export interface VisualEvidenceFailure {
+  sourceDrawingId: string;
+  sourceDrawingName: string;
+  sourceFileType: "pdf" | "dxf" | "dwg";
+  pageOrView: number;
+  renderStatus: Exclude<VisualEvidenceRenderStatus, "ready">;
+  reason: string;
+}
+
+/** Safe limits to prevent oversized AI visual runs. */
+export interface VisualEvidenceSafetyLimits {
+  maxPagesPerRun: number;
+  /**
+   * Maximum allowed image edge in pixels.
+   * Oversized pages are skipped unless pre-resized by adapter.
+   */
+  maxImageDimensionPx: number;
+  /**
+   * JPEG/WebP quality 0..1 used by render adapters.
+   */
+  imageQuality: number;
+}
+
+/** Complete AI visual input payload derived from rendered pages/views. */
+export interface AiVisualReviewInput {
+  projectId: string;
+  evidence: DrawingVisualEvidence[];
+  failures: VisualEvidenceFailure[];
+  limits: VisualEvidenceSafetyLimits;
+  generatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Safety constants (compile-time assertions — never narrowable away)
 // ---------------------------------------------------------------------------
 
@@ -288,6 +367,16 @@ export const AI_DETECTION_ALLOWED_INITIAL_STATUSES = [
 
 /** Statuses that AI alone can never assign to a reconciled element. */
 export const AI_FORBIDDEN_ELEMENT_STATUSES = [
+  "verified",
+  "final",
+  "approved",
+] as const;
+
+/**
+ * AI visual pipeline output is advisory-only.
+ * This explicitly blocks any accidental coupling to final/verified statuses.
+ */
+export const AI_VISUAL_PIPELINE_FORBIDDEN_STATUSES = [
   "verified",
   "final",
   "approved",

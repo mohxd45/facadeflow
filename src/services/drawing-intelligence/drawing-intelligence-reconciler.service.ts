@@ -119,7 +119,7 @@ function reconcileSheet(
         !usedDimIds.has(d.id)
     );
 
-    let matchingDim: SystemDimensionDetection | undefined =
+    const matchingDim: SystemDimensionDetection | undefined =
       samePagDims.find((d) => d.rawText.includes(codePrefix)) ??
       samePagDims[0]; // fallback: take first unclaimed dim on the same sheet
 
