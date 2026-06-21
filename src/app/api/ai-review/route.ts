@@ -28,15 +28,25 @@ import {
 // ---------------------------------------------------------------------------
 
 function getServerEnv() {
+  const rawTimeout = parseInt(process.env.AI_REVIEW_TIMEOUT_MS ?? "30000", 10);
+  const rawMaxChars = parseInt(
+    process.env.AI_REVIEW_MAX_INPUT_CHARS ?? String(DEFAULT_MAX_INPUT_CHARS),
+    10
+  );
+
+  const timeoutMs = Number.isFinite(rawTimeout) && rawTimeout > 0
+    ? Math.min(rawTimeout, 120000)
+    : 30000;
+  const maxInputChars = Number.isFinite(rawMaxChars) && rawMaxChars > 1000
+    ? Math.min(rawMaxChars, 200000)
+    : DEFAULT_MAX_INPUT_CHARS;
+
   return {
     provider: process.env.AI_REVIEW_PROVIDER ?? "mock",
     apiKey: process.env.OPENAI_API_KEY ?? "",
     model: process.env.AI_REVIEW_MODEL ?? "gpt-5-mini",
-    timeoutMs: parseInt(process.env.AI_REVIEW_TIMEOUT_MS ?? "30000", 10),
-    maxInputChars: parseInt(
-      process.env.AI_REVIEW_MAX_INPUT_CHARS ?? String(DEFAULT_MAX_INPUT_CHARS),
-      10
-    ),
+    timeoutMs,
+    maxInputChars,
   };
 }
 
@@ -85,9 +95,12 @@ async function callOpenAi(
   }
 
   const json = (await resp.json()) as {
-    choices: Array<{ message: { content: string } }>;
+    choices?: Array<{ message?: { content?: unknown } }>;
   };
   const content = json.choices?.[0]?.message?.content;
+  if (typeof content !== "string") {
+    throw new Error("OpenAI returned malformed content payload");
+  }
   if (!content) throw new Error("OpenAI returned empty content");
   return content;
 }
@@ -190,7 +203,9 @@ function parseLlmResponse(
         ? r.sourceDrawingNames.filter((s): s is string => typeof s === "string")
         : [],
       sourcePages: Array.isArray(r.sourcePages)
-        ? r.sourcePages.filter((p): p is number => typeof p === "number")
+        ? r.sourcePages.filter(
+            (p): p is number => Number.isFinite(p) && typeof p === "number" && p > 0
+          )
         : [],
       suggestedAction: suggestedAction as AiReviewFinding["suggestedAction"],
       confidence: confidence as AiReviewFinding["confidence"],
@@ -242,6 +257,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 
   if (!useOpenAi) {
     const result = runMockAiDrawingReview(input);
+    if (provider === "openai" && apiKey.length === 0) {
+      result.warnings.unshift(
+        "AI_REVIEW_PROVIDER=openai but OPENAI_API_KEY is missing. Using mock service."
+      );
+    } else if (provider !== "openai" && provider !== "mock") {
+      result.warnings.unshift(
+        `AI_REVIEW_PROVIDER=${provider} is unsupported. Using mock service.`
+      );
+    }
     result.runtimeMeta = {
       source: "mock",
       modelUsed: model,

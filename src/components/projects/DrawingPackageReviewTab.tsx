@@ -2200,6 +2200,14 @@ export default function DrawingPackageReviewTab({
   );
 
   const handleRunAiReview = useCallback(async () => {
+    if (isRunningAiReview) {
+      setAiReviewFeedback({
+        kind: "warning",
+        message: "AI Review is already running. Please wait for the current request to finish.",
+      });
+      return;
+    }
+
     if (analysis.status !== "done") {
       setAiReviewError(
         "Run Package Analysis first so AI Review has drawing evidence to review."
@@ -2361,6 +2369,7 @@ export default function DrawingPackageReviewTab({
     analysis,
     crossDrawingResult,
     drawings,
+    isRunningAiReview,
     projectId,
     projectIssues,
     projectOcrResults,
