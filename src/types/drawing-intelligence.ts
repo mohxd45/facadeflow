@@ -356,6 +356,25 @@ export interface AiVisualReviewInput {
 }
 
 // ---------------------------------------------------------------------------
+// Phase 6C: AI visual detection runtime contract
+// ---------------------------------------------------------------------------
+
+export interface AiVisualDetectionResult {
+  id: string;
+  projectId: string;
+  summary: string;
+  detections: AiVisualDetection[];
+  warnings: string[];
+  runtimeMeta: {
+    source: "openai" | "mock" | "mock_fallback";
+    modelUsed: string;
+    fallbackUsed: boolean;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
 // Safety constants (compile-time assertions — never narrowable away)
 // ---------------------------------------------------------------------------
 
