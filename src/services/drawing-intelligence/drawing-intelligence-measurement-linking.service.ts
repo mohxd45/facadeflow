@@ -79,6 +79,45 @@ function rawTextLooksLikeNoise(rawText: string): boolean {
   return noiseTokens.some((token) => t.includes(token));
 }
 
+function hasDimensionPairText(rawText: string): boolean {
+  return /(\d+(?:\.\d+)?)\s*(?:x|×)\s*(\d+(?:\.\d+)?)/i.test(rawText);
+}
+
+function isStrongTextPairEvidence(
+  d: SystemDimensionDetection,
+  codeMatchStrength: number
+): boolean {
+  if (d.detectionMethod !== "text_pair") return false;
+  if (!hasDimensionPairText(d.rawText)) return false;
+  if (codeMatchStrength < 55) return false;
+  const rawUpper = d.rawText.toUpperCase();
+  const nearby = normalizeCode(d.nearbyCodeRef);
+  return nearby.length > 0 || /[A-Z]{1,5}(?:\/[A-Z]+)?-\d{1,3}/.test(rawUpper);
+}
+
+function isStrongNearbyDimensionEvidence(
+  d: SystemDimensionDetection,
+  codeMatchStrength: number
+): boolean {
+  if (d.detectionMethod !== "nearby_dimension") return false;
+  return codeMatchStrength >= 60 && d.confidence === "high";
+}
+
+function isReliableCadGeometryEvidence(
+  d: SystemDimensionDetection,
+  codeMatchStrength: number
+): boolean {
+  if (d.detectionMethod !== "cad_geometry") return false;
+  if (d.source !== "dxf_dimension_entity" && d.source !== "dxf_text") return false;
+  const reason = (d.reason ?? "").toLowerCase();
+  const hasObjectRef =
+    reason.includes("object") ||
+    reason.includes("entity") ||
+    reason.includes("handle") ||
+    reason.includes("block");
+  return hasObjectRef || codeMatchStrength >= 55;
+}
+
 function hasAnyMeasurementValue(d: SystemDimensionDetection): boolean {
   return (
     typeof d.widthM === "number" ||
@@ -99,13 +138,23 @@ function dimensionsAreOutOfFacadeRange(d: SystemDimensionDetection): boolean {
 function isSuspiciousMeasurement(d: SystemDimensionDetection, codeMatchStrength: number): boolean {
   if (!hasAnyMeasurementValue(d)) return true;
   if (rawTextLooksLikeNoise(d.rawText)) return true;
+  if (d.detectionMethod === "text_pair" && (d.source === "pdf_text" || d.source === "ocr_text")) {
+    if (!isStrongTextPairEvidence(d, codeMatchStrength)) return true;
+  }
+  if (d.detectionMethod === "nearby_dimension") {
+    if (!isStrongNearbyDimensionEvidence(d, codeMatchStrength)) return true;
+  }
+  if (d.detectionMethod === "cad_geometry") {
+    if (!isReliableCadGeometryEvidence(d, codeMatchStrength)) return true;
+  }
   // If out of range and not explicitly code-linked from schedule/text pair, treat as suspicious.
   if (
     dimensionsAreOutOfFacadeRange(d) &&
     codeMatchStrength < 50 &&
     d.detectionMethod !== "schedule" &&
     d.detectionMethod !== "table" &&
-    d.detectionMethod !== "text_pair"
+    !isStrongTextPairEvidence(d, codeMatchStrength) &&
+    !isReliableCadGeometryEvidence(d, codeMatchStrength)
   ) {
     return true;
   }
@@ -208,9 +257,19 @@ export function linkMeasurementsToReconciledElements(
     }
 
     if (!best || best.score < 55 || (code.length > 0 && best.codeScore === 0)) {
-      out.unresolvedMeasurementReason =
-        "No safe dimension could be linked to this element.";
-      out.measurementRejectedAsSuspicious = false;
+      if (suspiciousCandidatesForElement.length > 0) {
+        const first = suspiciousCandidatesForElement[0];
+        const rejectedDims =
+          typeof first.widthM === "number" && typeof first.heightM === "number"
+            ? `${first.widthM} x ${first.heightM}`
+            : first.rawText;
+        out.unresolvedMeasurementReason = `Suspicious dimension ignored: ${rejectedDims}`;
+        out.measurementRejectedAsSuspicious = true;
+      } else {
+        out.unresolvedMeasurementReason =
+          "No safe dimension could be linked to this element.";
+        out.measurementRejectedAsSuspicious = false;
+      }
       unresolved.push({
         elementId: out.id,
         reason: out.unresolvedMeasurementReason,
@@ -223,8 +282,12 @@ export function linkMeasurementsToReconciledElements(
     }
 
     if (isSuspiciousMeasurement(best.dim, best.codeScore)) {
+      const rejectedDims =
+        typeof best.dim.widthM === "number" && typeof best.dim.heightM === "number"
+          ? `${best.dim.widthM} x ${best.dim.heightM}`
+          : best.dim.rawText;
       out.unresolvedMeasurementReason =
-        "Suspicious measurement detected and rejected.";
+        `Suspicious dimension ignored: ${rejectedDims}`;
       out.measurementRejectedAsSuspicious = true;
       unresolved.push({
         elementId: out.id,

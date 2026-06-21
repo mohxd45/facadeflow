@@ -392,6 +392,72 @@ function detectNumericConflict(
   return max / min > 2.0;
 }
 
+function hasExplicitCodeAndDimension(rawText: string | undefined, itemCode: string): boolean {
+  if (!rawText || !itemCode) return false;
+  const upper = rawText.toUpperCase();
+  const normalizedCode = normalizeItemCode(itemCode);
+  const hasCode = upper.includes(normalizedCode) || upper.includes(itemCode.toUpperCase());
+  const hasDims = /(\d+(?:\.\d+)?)\s*(?:x|×)\s*(\d+(?:\.\d+)?)/i.test(rawText);
+  return hasCode && hasDims;
+}
+
+function hasCadObjectReference(rawText: string | undefined): boolean {
+  if (!rawText) return false;
+  return /(obj(?:ect)?[_\s-]*ref|entity|handle|block)\s*[:=#]/i.test(rawText);
+}
+
+function isWeakTextDimensionSource(sourceType: CrossDrawingSourceType): boolean {
+  return (
+    sourceType === "pdf_text" ||
+    sourceType === "ocr_text" ||
+    sourceType === "plan" ||
+    sourceType === "elevation" ||
+    sourceType === "section" ||
+    sourceType === "detail" ||
+    sourceType === "package_evidence" ||
+    sourceType === "unknown"
+  );
+}
+
+function isUnsafeDimensionEntry(
+  field: "width" | "height",
+  value: number,
+  entry: EntryGroup[0],
+  itemCode: string
+): { unsafe: boolean; reason?: string } {
+  const sourceType = sourceTypeForEntry(entry);
+  const isScheduleLike = entry.evidence.drawingType === "schedule" || sourceType === "manual";
+  const rawText = entry.candidate.rawSnippet ?? "";
+  const explicitCodeAndDim = hasExplicitCodeAndDimension(rawText, itemCode);
+  const strongNearbyEvidence =
+    explicitCodeAndDim &&
+    entry.candidate.confidence === "high" &&
+    (entry.candidate.linkedEvidenceIds?.length ?? 0) > 0;
+  const cadReliable = (sourceType === "dxf" || sourceType === "cad") && hasCadObjectReference(rawText);
+
+  // Schedule/table-like and reliably referenced CAD dimensions are accepted.
+  if (isScheduleLike || cadReliable) return { unsafe: false };
+
+  // Weak text sources are unsafe by default unless explicit strong evidence exists.
+  if (isWeakTextDimensionSource(sourceType) && !explicitCodeAndDim && !strongNearbyEvidence) {
+    return {
+      unsafe: true,
+      reason:
+        `${field}=${value} rejected from weak text source (${sourceType}) without explicit code+dimension evidence.`,
+    };
+  }
+
+  // Hard safety guard for facade dimensions likely caused by grid/scale noise.
+  if (value >= SUSPICIOUS_DIMENSION_M && !isScheduleLike && !cadReliable) {
+    return {
+      unsafe: true,
+      reason: `${field}=${value} rejected as suspicious large text-derived dimension.`,
+    };
+  }
+
+  return { unsafe: false };
+}
+
 interface FieldResolution {
   value: number | undefined;
   source: CrossDrawingValueSource | undefined;
@@ -415,15 +481,35 @@ function resolveFieldWithPriority(
   itemCode: string
 ): FieldResolution {
   const gathered = gatherNumericValues(field, entries);
-  const possible = [...new Set(gathered.map((g) => g.value))];
+  const warnings: string[] = [];
+  const filteredGathered =
+    field === "width" || field === "height"
+      ? gathered.filter((g) => {
+          const safety = isUnsafeDimensionEntry(field, g.value, g.entry, itemCode);
+          if (safety.unsafe) {
+            const pairedDims =
+              typeof g.entry.candidate.width === "number" && typeof g.entry.candidate.height === "number"
+                ? `${g.entry.candidate.width} x ${g.entry.candidate.height}`
+                : String(g.value);
+            warnings.push(
+              `Suspicious dimension ignored: ${pairedDims}. ${safety.reason ?? "Unsafe dimension source."}`
+            );
+            return false;
+          }
+          return true;
+        })
+      : gathered;
+  const possible = [...new Set(filteredGathered.map((g) => g.value))];
 
-  if (gathered.length === 0) {
-    return { value: undefined, source: undefined, possible: [], hasConflict: false, reasoning: [], warnings: [] };
+  if (filteredGathered.length === 0) {
+    if (gathered.length > 0 && (field === "width" || field === "height")) {
+      warnings.push(`All ${field} values were rejected by strict safety filtering.`);
+    }
+    return { value: undefined, source: undefined, possible: [], hasConflict: false, reasoning: [], warnings };
   }
 
   const hasConflict = detectNumericConflict(field, possible);
   const reasoning: string[] = [];
-  const warnings: string[] = [];
 
   if (hasConflict) {
     warnings.push(
@@ -434,7 +520,7 @@ function resolveFieldWithPriority(
   }
 
   // Sort by: (1) source priority desc, (2) non-OCR first, (3) confidence desc
-  const sorted = [...gathered].sort((a, b) => {
+  const sorted = [...filteredGathered].sort((a, b) => {
     const aSrc = sourceTypeForEntry(a.entry);
     const bSrc = sourceTypeForEntry(b.entry);
     const aPri = getSourceRolePriorityForField(field, aSrc);

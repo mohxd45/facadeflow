@@ -235,7 +235,13 @@ export function integrateAiSystemDrawingReconciliation(
       reconciledElements: prelim,
       sheetRefs: fallbackSheets,
     });
-    const processed = measurementLinked.elements;
+    const processed = measurementLinked.elements.map((e) => ({
+      ...e,
+      recommendedEstimatorAction:
+        e.matchStatus === "needs_verification" && e.measurementRejectedAsSuspicious
+          ? "send_to_missing_info"
+          : inferRecommendedAction(e),
+    }));
     warnings.push(
       ...measurementLinked.unresolved.map((x) => `Measurement unresolved (${x.elementId}): ${x.reason}`),
       ...measurementLinked.suspicious.map((x) => `Suspicious measurement (${x.elementId}): ${x.reason}`)

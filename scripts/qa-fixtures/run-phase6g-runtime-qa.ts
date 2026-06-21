@@ -156,7 +156,7 @@ async function run() {
       hintWidthM: 20,
       hintHeightM: 5,
       measurementRejectedAsSuspicious: true,
-      unresolvedMeasurementReason: "Suspicious measurement detected and rejected.",
+      unresolvedMeasurementReason: "Suspicious dimension ignored: 20 x 5",
       flaggedIssues: ["Suspicious measurement rejected — estimator verification required."],
     });
     const reconciliation: DrawingSheetReconciliation = {
@@ -181,9 +181,9 @@ async function run() {
     );
     check(
       "6G-B-03b: suspicious note is shown",
-      "contains Suspicious dimension ignored",
+      "contains Suspicious",
       rendered.notes,
-      rendered.notes.includes("Suspicious dimension ignored")
+      rendered.notes.toLowerCase().includes("suspicious")
     );
 
     // 6G-B-04: candidate draft does not use suspicious dimensions

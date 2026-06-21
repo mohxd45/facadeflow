@@ -80,7 +80,8 @@ function measurementDisplay(
     row.measurementRejectedAsSuspicious === true ||
     (row.unresolvedMeasurementReason ?? "").toLowerCase().includes("suspicious");
   if (suspicious) {
-    return { width: "-", height: "-", note: "Suspicious dimension ignored" };
+    const reason = row.unresolvedMeasurementReason?.trim();
+    return { width: "-", height: "-", note: reason || "Suspicious dimension ignored" };
   }
 
   if (row.linkedMeasurement) {
