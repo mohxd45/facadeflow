@@ -40,6 +40,12 @@ import type {
   CrossDrawingQuantityCandidate,
 } from "@/types/cross-drawing-quantity";
 import type { AiReviewRunInput, FailedDrawingDiagnostic } from "@/types/ai-review";
+import type {
+  AiVisualDetectionResult,
+  AiVisualReviewInput,
+  DrawingSheetRef,
+  SystemSheetEvidence,
+} from "@/types/drawing-intelligence";
 import {
   buildCrossDrawingQuantities,
   candidateIsVerifiable,
@@ -96,6 +102,15 @@ import DrawingTakeoffReviewTable from "@/components/drawing-takeoff/DrawingTakeo
 import ZipPackageUploadPanel from "@/components/projects/ZipPackageUploadPanel";
 import { runAiReviewViaGateway } from "@/services/ai-review/ai-review-gateway.service";
 import { detectItemCodesInText } from "@/services/ai-review/ai-review-prompt-builder.service";
+import { buildAiVisualReviewInput } from "@/services/drawing-intelligence/drawing-visual-evidence.service";
+import { runAiVisualDetectionViaGateway } from "@/services/drawing-intelligence/ai-visual-detection-gateway.service";
+import {
+  integrateAiSystemDrawingReconciliation,
+  type IntegrateDrawingIntelligenceResult,
+} from "@/services/drawing-intelligence/drawing-intelligence-integration.service";
+import { buildSystemEvidenceFromPackageData } from "@/services/drawing-intelligence/drawing-intelligence-system-mapper.service";
+import { canRunDrawingIntelligence } from "@/services/drawing-intelligence/drawing-intelligence-ui.utils";
+import { runMockAiVisualDetection } from "@/services/drawing-intelligence/ai-visual-detection.service";
 import {
   buildMissingInfoInputFromFinding,
   isMissingInfoDuplicate,
@@ -103,6 +118,7 @@ import {
   CLARIFICATION_FINDING_TYPES,
 } from "@/services/ai-review/ai-review-action.service";
 import type { AiReviewDxfDrawingSummary } from "@/types/ai-review";
+import DrawingIntelligenceSection from "@/components/projects/DrawingIntelligenceSection";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -151,6 +167,17 @@ interface CrossDrawingActionFeedback {
 interface AiReviewActionFeedback {
   kind: "success" | "warning" | "error";
   message: string;
+}
+
+interface DrawingIntelligenceActionFeedback {
+  kind: "success" | "warning" | "error";
+  message: string;
+}
+
+interface DrawingIntelligencePreviewResult {
+  visualInput: AiVisualReviewInput;
+  aiVisualResult: AiVisualDetectionResult;
+  integration: IntegrateDrawingIntelligenceResult;
 }
 
 interface AnalysisState {
@@ -1409,7 +1436,13 @@ export default function DrawingPackageReviewTab({
 
   const [analysis, setAnalysis] = useState<AnalysisState>(INITIAL_ANALYSIS);
   const [activeSection, setActiveSection] = useState<
-    "summary" | "evidence" | "quantities" | "crossDrawing" | "aiReview" | "issues"
+    | "summary"
+    | "evidence"
+    | "quantities"
+    | "crossDrawing"
+    | "aiReview"
+    | "drawingIntelligence"
+    | "issues"
   >("summary");
   const [acceptBusy, setAcceptBusy] = useState(false);
   const [showZipUpload, setShowZipUpload] = useState(false);
@@ -1428,6 +1461,12 @@ export default function DrawingPackageReviewTab({
   const [aiReviewError, setAiReviewError] = useState<string | null>(null);
   const [aiReviewFeedback, setAiReviewFeedback] =
     useState<AiReviewActionFeedback | null>(null);
+  const [drawingIntelligenceResult, setDrawingIntelligenceResult] =
+    useState<DrawingIntelligencePreviewResult | null>(null);
+  const [isRunningDrawingIntelligence, setIsRunningDrawingIntelligence] = useState(false);
+  const [drawingIntelligenceError, setDrawingIntelligenceError] = useState<string | null>(null);
+  const [drawingIntelligenceFeedback, setDrawingIntelligenceFeedback] =
+    useState<DrawingIntelligenceActionFeedback | null>(null);
 
   const projectAiReviewResult = useMemo(
     () => aiReviewResultsByProject[projectId] ?? null,
@@ -2376,6 +2415,178 @@ export default function DrawingPackageReviewTab({
     saveAiReviewResult,
   ]);
 
+  const handleRunDrawingIntelligence = useCallback(async () => {
+    const gate = canRunDrawingIntelligence(isRunningDrawingIntelligence, analysis.status);
+    if (!gate.allowed) {
+      setDrawingIntelligenceError(gate.reason ?? "Drawing Intelligence cannot run right now.");
+      setDrawingIntelligenceFeedback({
+        kind: "warning",
+        message: gate.reason ?? "Drawing Intelligence cannot run right now.",
+      });
+      return;
+    }
+    if (drawings.length === 0) {
+      setDrawingIntelligenceError("No drawings available for visual evidence pipeline.");
+      setDrawingIntelligenceFeedback({
+        kind: "warning",
+        message: "No drawings available for visual evidence pipeline.",
+      });
+      return;
+    }
+
+    setIsRunningDrawingIntelligence(true);
+    setDrawingIntelligenceError(null);
+    setDrawingIntelligenceFeedback(null);
+
+    try {
+      const visualInput = await buildAiVisualReviewInput({
+        projectId,
+        drawings,
+      });
+
+      const visualGateway = await runAiVisualDetectionViaGateway(visualInput);
+      const systemMapped = buildSystemEvidenceFromPackageData({
+        projectId,
+        drawings,
+        crossDrawingResult,
+        evidence: analysis.evidence,
+      });
+
+      const knownSheets = new Map<string, DrawingSheetRef>();
+      for (const e of visualInput.evidence) {
+        knownSheets.set(`${e.sheet.drawingId}::${e.sheet.page}`, e.sheet);
+      }
+      for (const s of systemMapped.evidence) {
+        knownSheets.set(`${s.sheet.drawingId}::${s.sheet.page}`, s.sheet);
+      }
+
+      const integration = integrateAiSystemDrawingReconciliation({
+        projectId,
+        systemEvidence: systemMapped.evidence,
+        aiVisualDetectionResult: {
+          detections: visualGateway.result.detections,
+          warnings: [...visualGateway.result.warnings, ...systemMapped.warnings],
+        },
+        drawingSheets: Array.from(knownSheets.values()),
+      });
+
+      setDrawingIntelligenceResult({
+        visualInput,
+        aiVisualResult: visualGateway.result,
+        integration,
+      });
+      setActiveSection("drawingIntelligence");
+      setDrawingIntelligenceFeedback({
+        kind: "success",
+        message: `Drawing Intelligence completed (source=${visualGateway.source}) with ${visualGateway.result.detections.length} AI detection(s) and ${integration.reconciliations.flatMap((r) => r.reconciledElements).length} reconciled element(s).`,
+      });
+    } catch (err) {
+      const message =
+        err instanceof Error
+          ? `Drawing Intelligence failed: ${err.message}`
+          : "Drawing Intelligence failed unexpectedly.";
+      setDrawingIntelligenceError(message);
+      setDrawingIntelligenceFeedback({
+        kind: "error",
+        message: "Drawing Intelligence could not be completed.",
+      });
+    } finally {
+      setIsRunningDrawingIntelligence(false);
+    }
+  }, [
+    analysis.evidence,
+    analysis.status,
+    crossDrawingResult,
+    drawings,
+    isRunningDrawingIntelligence,
+    projectId,
+  ]);
+
+  const handleLoadDrawingIntelligenceQaScenario = useCallback(() => {
+    if (process.env.NODE_ENV === "production") return;
+    const sheet: DrawingSheetRef = {
+      drawingId: "qa-drawing-intelligence",
+      drawingName: "QA-DRAWING-INTELLIGENCE.pdf",
+      sourceFormat: "pdf_text",
+      page: 1,
+    };
+    const visualInput: AiVisualReviewInput = {
+      projectId,
+      evidence: [
+        {
+          id: "qa-visual-1",
+          projectId,
+          sourceDrawingId: sheet.drawingId,
+          sourceDrawingName: sheet.drawingName,
+          sourceFileType: "pdf",
+          adapterKind: "pdf",
+          sheet,
+          imageDataUrl: "data:image/jpeg;base64,QA",
+          image: {
+            mimeType: "image/jpeg",
+            width: 1200,
+            height: 900,
+            approxBytes: 1024,
+            quality: 0.72,
+          },
+          renderStatus: "ready",
+          warnings: [],
+          createdAt: new Date().toISOString(),
+        },
+      ],
+      failures: [],
+      limits: { maxPagesPerRun: 6, maxImageDimensionPx: 2400, imageQuality: 0.72 },
+      generatedAt: new Date().toISOString(),
+    };
+    const aiVisualResult = runMockAiVisualDetection(visualInput);
+    const systemEvidence: SystemSheetEvidence[] = [
+      {
+        sheet,
+        codeDetections: [
+          {
+            id: "qa-code-1",
+            sheet,
+            rawText: "W-01",
+            normalizedCode: "W-01",
+            confidence: "high",
+            source: "pdf_text",
+            detectedAt: new Date().toISOString(),
+          },
+        ],
+        dimensionDetections: [
+          {
+            id: "qa-dim-1",
+            sheet,
+            rawText: "1.2x1.5",
+            widthM: 1.2,
+            heightM: 1.5,
+            lengthM: null,
+            confidence: "high",
+            source: "pdf_text",
+            detectedAt: new Date().toISOString(),
+          },
+        ],
+        dxfDetections: [],
+      },
+    ];
+    const integration = integrateAiSystemDrawingReconciliation({
+      projectId,
+      systemEvidence,
+      aiVisualDetectionResult: {
+        detections: aiVisualResult.detections,
+        warnings: aiVisualResult.warnings,
+      },
+      drawingSheets: [sheet],
+    });
+    setDrawingIntelligenceResult({ visualInput, aiVisualResult, integration });
+    setDrawingIntelligenceError(null);
+    setDrawingIntelligenceFeedback({
+      kind: "success",
+      message: "Drawing Intelligence QA demo loaded (dev-only).",
+    });
+    setActiveSection("drawingIntelligence");
+  }, [projectId]);
+
   const handleAiViewCandidate = useCallback((candidateId: string) => {
     const candidate = getCrossDrawingCandidateById(candidateId);
     if (!candidate) {
@@ -2667,6 +2878,9 @@ export default function DrawingPackageReviewTab({
   const evidenceCount    = analysis.evidence.flatMap((e) => e.candidates).length;
   const crossDrawingCount = crossDrawingResult?.candidates.length ?? 0;
   const aiReviewCount = projectAiReviewResult?.findings.length ?? 0;
+  const drawingIntelligenceCount =
+    drawingIntelligenceResult?.integration.reconciliations.flatMap((r) => r.reconciledElements)
+      .length ?? 0;
   const failedPdfDrawings = useMemo(
     () =>
       analysis.classifiedDrawings
@@ -2681,6 +2895,7 @@ export default function DrawingPackageReviewTab({
     { key: "quantities",   label: "Qty Candidates",           count: analysis.quantityCandidates.length },
     { key: "crossDrawing", label: "Cross-Drawing Quantities", count: crossDrawingCount },
     { key: "aiReview",     label: "AI Review",                count: aiReviewCount },
+    { key: "drawingIntelligence", label: "Drawing Intelligence", count: drawingIntelligenceCount },
     { key: "issues",       label: "Missing Info",             count: analysis.issueCandidates.length + projectIssues.filter((i) => i.status === "open").length },
   ] as const;
 
@@ -3063,6 +3278,26 @@ export default function DrawingPackageReviewTab({
           onRejectCandidate={handleAiRejectCandidate}
           onCreateClarification={handleAiCreateClarification}
           onLoadQaScenario={handleLoadAiReviewQaScenario}
+          showQaScenarioButton={process.env.NODE_ENV !== "production"}
+        />
+      )}
+
+      {/* ── Section: Drawing Intelligence ─────────────────────────────────── */}
+      {activeSection === "drawingIntelligence" && (
+        <DrawingIntelligenceSection
+          analysisStatus={analysis.status}
+          runBusy={isRunningDrawingIntelligence}
+          runError={drawingIntelligenceError}
+          runSuccess={
+            drawingIntelligenceFeedback?.kind === "success"
+              ? drawingIntelligenceFeedback.message
+              : null
+          }
+          onRun={handleRunDrawingIntelligence}
+          visualInput={drawingIntelligenceResult?.visualInput ?? null}
+          aiResult={drawingIntelligenceResult?.aiVisualResult ?? null}
+          integration={drawingIntelligenceResult?.integration ?? null}
+          onLoadQaScenario={handleLoadDrawingIntelligenceQaScenario}
           showQaScenarioButton={process.env.NODE_ENV !== "production"}
         />
       )}
