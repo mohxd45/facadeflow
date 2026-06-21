@@ -24,6 +24,10 @@ import type {
   VisualEvidenceAdapterKind,
 } from "@/types/drawing-intelligence";
 import { resolveDrawingBlob } from "@/services/file/drawing-blob-resolver";
+import {
+  getDrawingFileAvailabilityNote,
+  getDrawingFileAvailabilityStatus,
+} from "@/services/file/drawing-file-availability.service";
 import { renderPdfPagesToImages } from "@/services/ocr/pdf-ocr.service";
 
 // ---------------------------------------------------------------------------
@@ -243,6 +247,19 @@ export async function buildAiVisualReviewInput(
         pageOrView: 0,
         renderStatus: "skipped",
         reason: `Global page limit reached (${limits.maxPagesPerRun}).`,
+      });
+      continue;
+    }
+
+    const fileAvailability = getDrawingFileAvailabilityStatus(drawing);
+    if (fileAvailability === "metadata_only" || fileAvailability === "needs_reupload") {
+      failures.push({
+        sourceDrawingId: drawing.id,
+        sourceDrawingName: drawing.fileName,
+        sourceFileType: drawing.fileType,
+        pageOrView: 0,
+        renderStatus: "failed",
+        reason: getDrawingFileAvailabilityNote(drawing),
       });
       continue;
     }

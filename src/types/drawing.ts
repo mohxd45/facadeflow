@@ -16,6 +16,13 @@ export type DrawingFileStatus =
   | "queued"
   | "error";
 
+export type DrawingFileAvailabilityStatus =
+  | "file_available"
+  | "metadata_only"
+  | "needs_reupload"
+  | "conversion_required"
+  | "unsupported_file";
+
 export type DrawingCategory =
   | "acp_cladding_plan"
   | "typical_floor_plan"

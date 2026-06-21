@@ -170,6 +170,7 @@ export class DrawingUploadService {
 
     const drawingId = generateId();
     const repo = getDrawingRepository();
+    let hasLocalBlob = false;
 
     // Large files (> 250 MB) — register metadata only, queued status
     if (analysis.metadataOnly) {
@@ -241,6 +242,15 @@ export class DrawingUploadService {
 
     onProgress?.(90);
 
+    // Keep a local IndexedDB copy as a resilient render source for AI Vision.
+    // This enables later render/review even when metadata-only imports exist in old projects.
+    try {
+      await saveFileBlob(drawingId, file);
+      hasLocalBlob = true;
+    } catch {
+      hasLocalBlob = false;
+    }
+
     // Create metadata in Supabase DB ────────────────────────────────────
     const status: DrawingFileStatus =
       fileType === "dwg" ? "queued" : "ready";
@@ -260,7 +270,7 @@ export class DrawingUploadService {
         status,
         storagePath: uploadResult.storagePath,
         previewUrl: uploadResult.publicUrl,
-        hasLocalBlob: false,
+        hasLocalBlob,
       });
     } catch (metaErr) {
       // Metadata save failed — try to clean up the uploaded file

@@ -91,6 +91,10 @@ import {
   resolveDrawingBlob,
   DrawingBlobResolveError,
 } from "@/services/file/drawing-blob-resolver";
+import {
+  getDrawingFileAvailabilityStatus,
+  getDrawingFileAvailabilityNote,
+} from "@/services/file/drawing-file-availability.service";
 import { exportDrawingTakeoffToPdf } from "@/services/export/pdf-report.service";
 import { useDrawingTakeoffStore } from "@/stores/drawing-takeoff-store";
 import { useDrawingIssueStore } from "@/stores/drawing-issue-store";
@@ -491,12 +495,18 @@ const OCR_STATUS_COLORS: Record<OcrStatus, string> = {
 
 /** Notes column — prefer live OCR store state over stale analysis snapshot. */
 function resolvePackageSummaryNotes(
+  drawing: DrawingFile,
   drawingId: string,
   ocrStatus: OcrStatus,
   cls: ClassifiedDrawing,
   evidence: DrawingEvidence[],
   ocrFailureReason?: string
 ): string {
+  const availability = getDrawingFileAvailabilityStatus(drawing);
+  if (availability === "metadata_only" || availability === "needs_reupload") {
+    return getDrawingFileAvailabilityNote(drawing);
+  }
+
   if (ocrStatus === "failed" && ocrFailureReason) {
     return ocrFailureReason;
   }
@@ -714,6 +724,7 @@ function PackageSummary({
                 ? getOcrFailureWarnings(d.id, ocrResults)[0]
                 : undefined;
             const rowNotes = resolvePackageSummaryNotes(
+              d,
               d.id,
               ocrStatus,
               cls,
@@ -725,6 +736,7 @@ function PackageSummary({
               cls.analysisStatus === "scanned_or_image_pdf"
                 ? { label: "OCR Ready", color: "bg-green-100 text-green-800" }
                 : statusStyle;
+            const fileAvailability = getDrawingFileAvailabilityStatus(d);
             const isOcrRunning = ocrRunningId === d.id;
             const ocrTextPreview = drawingOcr
               .filter((r) => r.status === "completed" && r.extractedText.trim())
@@ -756,9 +768,20 @@ function PackageSummary({
                   <span className="line-clamp-1">{cls.sheetTitle ?? "—"}</span>
                 </TableCell>
                 <TableCell>
-                  <Badge className={cn("text-[10px] px-1.5 py-0", displayStatusStyle.color)}>
-                    {displayStatusStyle.label}
-                  </Badge>
+                  <div className="flex flex-col gap-1">
+                    <Badge className={cn("text-[10px] px-1.5 py-0 w-fit", displayStatusStyle.color)}>
+                      {displayStatusStyle.label}
+                    </Badge>
+                    {(fileAvailability === "metadata_only" ||
+                      fileAvailability === "needs_reupload" ||
+                      fileAvailability === "conversion_required") && (
+                      <Badge className="text-[9px] px-1.5 py-0 w-fit bg-amber-100 text-amber-800">
+                        {fileAvailability === "conversion_required"
+                          ? "Conversion required"
+                          : "Re-upload required"}
+                      </Badge>
+                    )}
+                  </div>
                 </TableCell>
                 <TableCell>
                   <div className="flex flex-col gap-1">
