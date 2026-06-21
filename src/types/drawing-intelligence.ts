@@ -208,6 +208,18 @@ export type ReconciliationMatchStatus =
  */
 export type ReconciliationConfidence = "high" | "medium" | "low";
 
+/**
+ * Estimator actions used by Phase 6D integration workflow.
+ * These are advisory recommendations only; estimator remains in control.
+ */
+export type DrawingIntelligenceEstimatorAction =
+  | "accept_as_candidate"
+  | "send_to_missing_info"
+  | "create_clarification"
+  | "reject_suggestion"
+  | "resolve_conflict"
+  | "review_manually";
+
 /** One reconciled element — the core output of Phase 6 analysis. */
 export interface ReconciledElement {
   id: string;
@@ -246,6 +258,8 @@ export interface ReconciledElement {
     | "add_item_code"
     | "resolve_conflict"
     | "ignore";
+  /** Phase 6D normalized workflow action (advisory only). */
+  recommendedEstimatorAction?: DrawingIntelligenceEstimatorAction;
 
   reconciledAt: string;
 }
