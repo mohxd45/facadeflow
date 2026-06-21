@@ -255,7 +255,7 @@ export default function DrawingIntelligenceSection({
         </div>
       )}
 
-      {rows.length === 0 ? (
+      {rows.length === 0 && failureRows.length === 0 ? (
         <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center space-y-2">
           <Sparkles className="mx-auto h-7 w-7 text-slate-400" />
           <p className="text-sm font-medium text-slate-600">No drawing intelligence run yet</p>
