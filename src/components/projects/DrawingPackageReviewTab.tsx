@@ -1580,26 +1580,26 @@ export default function DrawingPackageReviewTab({
     });
   }, [drawings, analysis.classifiedDrawings, projectOcrResults, runOcrForDrawing]);
 
-  // ── Run full package analysis ─────────────────────────────────────────────
-  const handleRunAnalysis = useCallback(async () => {
-    setAnalysis({ ...INITIAL_ANALYSIS, status: "running", progress: "Starting analysis…" });
-    setActiveSection("summary");
-    setOcrBatchSummary(null);
-
-    const ocrResults = useOcrResultStore.getState().getByProjectId(projectId);
-
-    try {
+  const runSystemExtraction = useCallback(
+    async (
+      onProgress?: (message: string) => void
+    ): Promise<{
+      classifiedDrawings: ClassifiedDrawing[];
+      evidence: DrawingEvidence[];
+      warnings: string[];
+      quantityCandidates: DrawingTakeoffCandidate[];
+      issueCandidates: CreateDrawingIssueItemInput[];
+    }> => {
+      const ocrResults = useOcrResultStore.getState().getByProjectId(projectId);
       const classifiedDrawings: ClassifiedDrawing[] = [];
       const evidence: DrawingEvidence[] = [];
       const warnings: string[] = [];
-
       const { skippedDuplicates } = selectDrawingsForPackageAnalysis(drawings);
 
       for (const drawing of drawings) {
-        setAnalysis((prev) => ({
-          ...prev,
-          progress: `Analysing: ${drawing.fileName} (${drawings.indexOf(drawing) + 1}/${drawings.length})`,
-        }));
+        onProgress?.(
+          `Analysing: ${drawing.fileName} (${drawings.indexOf(drawing) + 1}/${drawings.length})`
+        );
 
         const skipInfo = skippedDuplicates.get(drawing.id);
         if (skipInfo) {
@@ -1735,27 +1735,16 @@ export default function DrawingPackageReviewTab({
 
       // ── Detect missing information ─────────────────────────────────────────
       const { issues } = detectMissingInformation(projectId, evidence);
-
-      setAnalysis({
-        status: "done",
-        progress: "",
+      return {
         classifiedDrawings,
         evidence,
+        warnings,
         quantityCandidates: evidence.flatMap((ev) => ev.candidates),
         issueCandidates: issues,
-        warnings,
-        errorMsg: null,
-      });
-      setActiveSection("summary");
-    } catch (err) {
-      setAnalysis((prev) => ({
-        ...prev,
-        status: "error",
-        progress: "",
-        errorMsg: err instanceof Error ? err.message : "Analysis failed unexpectedly.",
-      }));
-    }
-  }, [drawings, projectId]);
+      };
+    },
+    [drawings, projectId]
+  );
 
   // ── Save quantity candidates → Drawing Takeoff (safe actions) ─────────────
   const mapCandidatesToTakeoffInputs = useCallback(
@@ -2431,15 +2420,8 @@ export default function DrawingPackageReviewTab({
   ]);
 
   const handleRunDrawingIntelligence = useCallback(async () => {
-    const gate = canRunDrawingIntelligence(isRunningDrawingIntelligence, analysis.status);
-    if (!gate.allowed) {
-      setDrawingIntelligenceError(gate.reason ?? "Drawing Intelligence cannot run right now.");
-      setDrawingIntelligenceFeedback({
-        kind: "warning",
-        message: gate.reason ?? "Drawing Intelligence cannot run right now.",
-      });
-      return;
-    }
+    const gate = canRunDrawingIntelligence(isRunningDrawingIntelligence, "done");
+    if (!gate.allowed) return;
     if (drawings.length === 0) {
       setDrawingIntelligenceError("No drawings available for visual evidence pipeline.");
       setDrawingIntelligenceFeedback({
@@ -2452,19 +2434,48 @@ export default function DrawingPackageReviewTab({
     setIsRunningDrawingIntelligence(true);
     setDrawingIntelligenceError(null);
     setDrawingIntelligenceFeedback(null);
+    setAnalysis({ ...INITIAL_ANALYSIS, status: "running", progress: "AI Vision first: rendering pages…" });
 
     try {
+      // 1) AI Vision first
       const visualInput = await buildAiVisualReviewInput({
         projectId,
         drawings,
       });
-
       const visualGateway = await runAiVisualDetectionViaGateway(visualInput);
+      // 2) Then run system extraction
+      const systemAnalysis = await runSystemExtraction((message) => {
+        setAnalysis((prev) => ({ ...prev, progress: `System extraction: ${message}` }));
+      });
+      setAnalysis({
+        status: "done",
+        progress: "",
+        classifiedDrawings: systemAnalysis.classifiedDrawings,
+        evidence: systemAnalysis.evidence,
+        quantityCandidates: systemAnalysis.quantityCandidates,
+        issueCandidates: systemAnalysis.issueCandidates,
+        warnings: systemAnalysis.warnings,
+        errorMsg: null,
+      });
+      // Keep cross-drawing aligned with the extracted system evidence.
+      const aiFirstCrossDrawing = buildCrossDrawingQuantities({
+        projectId,
+        drawings: drawings as Parameters<typeof buildCrossDrawingQuantities>[0]["drawings"],
+        classifiedDrawings:
+          systemAnalysis.classifiedDrawings as Parameters<typeof buildCrossDrawingQuantities>[0]["classifiedDrawings"],
+        evidenceItems:
+          systemAnalysis.evidence as Parameters<typeof buildCrossDrawingQuantities>[0]["evidenceItems"],
+        drawingTakeoffCandidates:
+          systemAnalysis.quantityCandidates as Parameters<typeof buildCrossDrawingQuantities>[0]["drawingTakeoffCandidates"],
+        missingInfoItems:
+          projectIssues as Parameters<typeof buildCrossDrawingQuantities>[0]["missingInfoItems"],
+      });
+      setCrossDrawingResult(aiFirstCrossDrawing);
       const systemMapped = buildSystemEvidenceFromPackageData({
         projectId,
         drawings,
-        crossDrawingResult,
-        evidence: analysis.evidence,
+        crossDrawingResult: aiFirstCrossDrawing,
+        evidence: systemAnalysis.evidence,
       });
 
       const knownSheets = new Map<string, DrawingSheetRef>();
@@ -2494,28 +2505,28 @@ export default function DrawingPackageReviewTab({
       setActiveSection("drawingIntelligence");
       setDrawingIntelligenceFeedback({
         kind: "success",
-        message: `Drawing Intelligence completed (source=${visualGateway.source}) with ${visualGateway.result.detections.length} AI detection(s) and ${integration.reconciliations.flatMap((r) => r.reconciledElements).length} reconciled element(s).`,
+        message: `Extract Quantities completed (AI-first, source=${visualGateway.source}) with ${visualGateway.result.detections.length} AI detection(s) and ${integration.reconciliations.flatMap((r) => r.reconciledElements).length} reconciled element(s).`,
       });
     } catch (err) {
       const message =
         err instanceof Error
-          ? `Drawing Intelligence failed: ${err.message}`
-          : "Drawing Intelligence failed unexpectedly.";
+          ? `Extract Quantities failed: ${err.message}`
+          : "Extract Quantities failed unexpectedly.";
       setDrawingIntelligenceError(message);
+      setAnalysis((prev) => ({ ...prev, status: "error", progress: "", errorMsg: message }));
       setDrawingIntelligenceFeedback({
         kind: "error",
-        message: "Drawing Intelligence could not be completed.",
+        message: "AI-first quantity extraction could not be completed.",
       });
     } finally {
       setIsRunningDrawingIntelligence(false);
     }
   }, [
-    analysis.evidence,
-    analysis.status,
-    crossDrawingResult,
     drawings,
     isRunningDrawingIntelligence,
     projectId,
+    projectIssues,
+    runSystemExtraction,
   ]);
 
   const handleLoadDrawingIntelligenceQaScenario = useCallback(() => {
@@ -3080,7 +3091,7 @@ export default function DrawingPackageReviewTab({
             </Badge>
           </h2>
           <p className="mt-0.5 text-sm text-[var(--muted)]">
-            Analyse all drawings — classify types, extract evidence, run OCR on scanned PDFs.
+            AI-first extraction: render drawings, run AI Vision, then validate with system evidence.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -3129,13 +3140,13 @@ export default function DrawingPackageReviewTab({
           )}
           <Button
             size="sm"
-            onClick={handleRunAnalysis}
-            disabled={drawings.length === 0 || analysis.status === "running"}
+            onClick={handleRunDrawingIntelligence}
+            disabled={drawings.length === 0 || isRunningDrawingIntelligence || analysis.status === "running"}
           >
-            {analysis.status === "running" ? (
-              <><Loader2 className="h-4 w-4 animate-spin" />Analysing…</>
+            {isRunningDrawingIntelligence || analysis.status === "running" ? (
+              <><Loader2 className="h-4 w-4 animate-spin" />Extracting…</>
             ) : (
-              <><ScanSearch className="h-4 w-4" />Run Package Analysis</>
+              <><ScanSearch className="h-4 w-4" />Extract Quantities (AI First)</>
             )}
           </Button>
         </div>
@@ -3165,7 +3176,7 @@ export default function DrawingPackageReviewTab({
             {ocrBatchSummary.failed === 0 && (
               <>
                 <CheckCircle2 className="inline h-3.5 w-3.5 mr-1" />
-                OCR complete. Re-run Package Analysis to extract evidence from OCR text.
+                OCR complete. Re-run AI-first extraction to refresh quantities from OCR text.
               </>
             )}
             {ocrBatchSummary.completed === 0 && ocrBatchSummary.failed > 0 && (
@@ -3182,8 +3193,13 @@ export default function DrawingPackageReviewTab({
             )}
           </span>
           {ocrBatchSummary.completed > 0 && (
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={handleRunAnalysis}>
-              <ScanSearch className="h-3 w-3 mr-1" />Re-analyze Package
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs"
+              onClick={handleRunDrawingIntelligence}
+            >
+              <ScanSearch className="h-3 w-3 mr-1" />Re-run AI-first extraction
             </Button>
           )}
         </div>

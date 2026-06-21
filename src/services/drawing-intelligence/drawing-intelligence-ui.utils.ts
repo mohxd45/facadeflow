@@ -20,10 +20,23 @@ export interface DrawingIntelligenceRow {
   id: string;
   elementType: string;
   code: string;
+  count: string;
   width: string;
   height: string;
+  length: string;
+  area: string;
+  sourceRef: string;
+  aiConfidence: string;
+  systemConfidence: string;
   confidence: string;
   status: string;
+  extractionStatus:
+    | "ready_for_review"
+    | "needs_verification"
+    | "missing_info"
+    | "conversion_required"
+    | "unsupported_file"
+    | "failed_to_read";
   recommendedAction: DrawingIntelligenceEstimatorAction | "review_manually";
   sheetRef: string;
   notes: string;
@@ -34,6 +47,14 @@ export const DRAWING_INTELLIGENCE_RESULT_VERSION = "6g-b-runtime-1";
 
 export function isDrawingIntelligenceResultStale(version?: string): boolean {
   return version !== DRAWING_INTELLIGENCE_RESULT_VERSION;
+}
+
+export function mapVisualFailureToExtractionStatus(
+  sourceFileType: "pdf" | "dxf" | "dwg"
+): "conversion_required" | "unsupported_file" | "failed_to_read" {
+  if (sourceFileType === "dwg") return "conversion_required";
+  if (sourceFileType === "dxf") return "unsupported_file";
+  return "failed_to_read";
 }
 
 export function canRunDrawingIntelligence(
@@ -105,6 +126,32 @@ function inferType(row: ReconciledElement): string {
   return "unknown_facade_element";
 }
 
+function mapExtractionStatus(row: ReconciledElement): DrawingIntelligenceRow["extractionStatus"] {
+  if (row.measurementRejectedAsSuspicious) return "needs_verification";
+  if (row.unresolvedMeasurementReason && row.unresolvedMeasurementReason.includes("No safe")) {
+    return "missing_info";
+  }
+  if (row.matchStatus === "matched" && row.linkedMeasurement && !row.measurementRejectedAsSuspicious) {
+    return "ready_for_review";
+  }
+  if (row.matchStatus === "system_only" || row.matchStatus === "ai_only") return "needs_verification";
+  if (row.matchStatus === "conflict" || row.matchStatus === "needs_verification") {
+    return "needs_verification";
+  }
+  return "needs_verification";
+}
+
+function systemConfidence(row: ReconciledElement): string {
+  const values: Array<"high" | "medium" | "low"> = [];
+  if (row.systemCodeDetection?.confidence) values.push(row.systemCodeDetection.confidence);
+  if (row.systemDimensionDetection?.confidence) values.push(row.systemDimensionDetection.confidence);
+  if (row.systemDxfDetection?.confidence) values.push(row.systemDxfDetection.confidence);
+  if (values.length === 0) return "-";
+  if (values.includes("low")) return "low";
+  if (values.includes("medium")) return "medium";
+  return "high";
+}
+
 export function toDrawingIntelligenceRows(
   reconciliations: DrawingSheetReconciliation[]
 ): DrawingIntelligenceRow[] {
@@ -127,10 +174,28 @@ export function toDrawingIntelligenceRows(
         id: row.id,
         elementType: inferType(row),
         code,
+        count: "-",
         width: dims.width,
         height: dims.height,
+        length:
+          typeof row.systemDimensionDetection?.lengthM === "number"
+            ? fmt(row.systemDimensionDetection.lengthM)
+            : "-",
+        area:
+          typeof row.hintWidthM === "number" && typeof row.hintHeightM === "number"
+            ? fmt(Number((row.hintWidthM * row.hintHeightM).toFixed(3)))
+            : "-",
+        sourceRef: row.systemDxfDetection?.layerName
+          ? `${row.sheet.drawingName} / p${row.sheet.page} / layer:${row.systemDxfDetection.layerName}${row.systemDxfDetection.blockName ? ` / block:${row.systemDxfDetection.blockName}` : ""}`
+          : `${row.sheet.drawingName} / p${row.sheet.page}`,
+        aiConfidence:
+          typeof row.aiDetection?.aiConfidence === "number"
+            ? row.aiDetection.aiConfidence.toFixed(2)
+            : "-",
+        systemConfidence: systemConfidence(row),
         confidence: row.confidence,
         status: row.matchStatus,
+        extractionStatus: mapExtractionStatus(row),
         recommendedAction,
         sheetRef: `${sheet.sheet.drawingName} / page ${sheet.sheet.page}`,
         notes: notes || "-",

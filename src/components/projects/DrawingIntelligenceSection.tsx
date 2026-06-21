@@ -26,6 +26,7 @@ import type {
 import type { IntegrateDrawingIntelligenceResult } from "@/services/drawing-intelligence/drawing-intelligence-integration.service";
 import {
   computeDrawingIntelligenceStats,
+  mapVisualFailureToExtractionStatus,
   type DrawingIntelligenceRow,
   toDrawingIntelligenceRows,
 } from "@/services/drawing-intelligence/drawing-intelligence-ui.utils";
@@ -165,6 +166,7 @@ export default function DrawingIntelligenceSection({
       ),
     [integration, visualInput?.evidence.length, aiResult?.detections.length]
   );
+  const failureRows = useMemo(() => visualInput?.failures ?? [], [visualInput]);
 
   const cards = [
     { label: "Visual Evidence", value: stats.visualEvidenceCount },
@@ -188,17 +190,17 @@ export default function DrawingIntelligenceSection({
         <Button
           size="sm"
           onClick={() => void onRun()}
-          disabled={runBusy || analysisStatus !== "done"}
+          disabled={runBusy}
         >
           {runBusy ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />
-              Running Drawing Intelligence...
+              Extracting Quantities...
             </>
           ) : (
             <>
               <Sparkles className="h-4 w-4" />
-              Run Drawing Intelligence
+              Extract Quantities (AI First)
             </>
           )}
         </Button>
@@ -207,6 +209,9 @@ export default function DrawingIntelligenceSection({
             <Bot className="h-4 w-4" />
             Load QA Demo (dev-only)
           </Button>
+        )}
+        {analysisStatus === "running" && (
+          <span className="text-[11px] text-slate-500">System extraction is currently running...</span>
         )}
       </div>
 
@@ -255,7 +260,7 @@ export default function DrawingIntelligenceSection({
           <Sparkles className="mx-auto h-7 w-7 text-slate-400" />
           <p className="text-sm font-medium text-slate-600">No drawing intelligence run yet</p>
           <p className="text-xs text-slate-500">
-            Run Package Analysis, then click <strong>Run Drawing Intelligence</strong>.
+            Upload drawing(s), then click <strong>Extract Quantities (AI First)</strong>.
           </p>
         </div>
       ) : (
@@ -265,11 +270,17 @@ export default function DrawingIntelligenceSection({
               <TableRow>
                 <TableHead>Element</TableHead>
                 <TableHead>Code</TableHead>
-                <TableHead>Dims (W x H)</TableHead>
-                <TableHead>Confidence</TableHead>
+                <TableHead>Count</TableHead>
+                <TableHead>Width</TableHead>
+                <TableHead>Height</TableHead>
+                <TableHead>Length</TableHead>
+                <TableHead>Area</TableHead>
+                <TableHead>Source</TableHead>
+                <TableHead>AI Conf</TableHead>
+                <TableHead>System Conf</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Extraction</TableHead>
                 <TableHead>Recommended Action</TableHead>
-                <TableHead>Sheet / Source</TableHead>
                 <TableHead>Notes</TableHead>
                 <TableHead>Actions</TableHead>
               </TableRow>
@@ -279,7 +290,14 @@ export default function DrawingIntelligenceSection({
                 <TableRow key={row.id}>
                   <TableCell className="text-xs font-medium">{row.elementType}</TableCell>
                   <TableCell className="text-xs">{row.code}</TableCell>
-                  <TableCell className="text-xs">{row.width} x {row.height}</TableCell>
+                  <TableCell className="text-xs">{row.count}</TableCell>
+                  <TableCell className="text-xs">{row.width}</TableCell>
+                  <TableCell className="text-xs">{row.height}</TableCell>
+                  <TableCell className="text-xs">{row.length}</TableCell>
+                  <TableCell className="text-xs">{row.area}</TableCell>
+                  <TableCell className="text-xs">{row.sourceRef}</TableCell>
+                  <TableCell className="text-xs">{row.aiConfidence}</TableCell>
+                  <TableCell className="text-xs">{row.systemConfidence}</TableCell>
                   <TableCell className="text-xs">
                     <Badge variant="secondary" className="text-[10px]">{row.confidence}</Badge>
                   </TableCell>
@@ -297,11 +315,12 @@ export default function DrawingIntelligenceSection({
                       {row.status}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-xs">{row.recommendedAction}</TableCell>
                   <TableCell className="text-xs">
-                    <div>{row.sheetRef}</div>
-                    <div className="text-[10px] text-slate-500">{row.source}</div>
+                    <Badge variant="outline" className="text-[10px]">
+                      {row.extractionStatus}
+                    </Badge>
                   </TableCell>
+                  <TableCell className="text-xs">{row.recommendedAction}</TableCell>
                   <TableCell className="text-xs max-w-[320px]">{row.notes}</TableCell>
                   <TableCell className="text-xs min-w-[320px]">
                     <RowActionCell
@@ -314,6 +333,31 @@ export default function DrawingIntelligenceSection({
                       onReviewManually={onReviewManually}
                     />
                   </TableCell>
+                </TableRow>
+              ))}
+              {failureRows.map((f, idx) => (
+                <TableRow key={`failure-${idx}`}>
+                  <TableCell className="text-xs font-medium">file_pipeline</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">{`${f.sourceDrawingName} / view ${f.pageOrView}`}</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">-</TableCell>
+                  <TableCell className="text-xs">
+                    <Badge variant="secondary" className="text-[10px]">low</Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">
+                    <Badge variant="outline" className="text-[10px]">
+                      {mapVisualFailureToExtractionStatus(f.sourceFileType)}
+                    </Badge>
+                  </TableCell>
+                  <TableCell className="text-xs">review_manually</TableCell>
+                  <TableCell className="text-xs max-w-[320px]">{f.reason}</TableCell>
+                  <TableCell className="text-xs min-w-[320px]">-</TableCell>
                 </TableRow>
               ))}
             </TableBody>
