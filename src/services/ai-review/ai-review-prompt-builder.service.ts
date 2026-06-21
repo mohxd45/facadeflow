@@ -28,6 +28,8 @@ import {
 } from "@/services/drawing-package/cross-drawing-quantity-builder.service";
 
 export const DEFAULT_MAX_INPUT_CHARS = 40_000;
+const MAX_CANDIDATES_IN_PROMPT = 250;
+const MAX_CANDIDATE_IDS_IN_PROMPT = 250;
 
 // ---------------------------------------------------------------------------
 // Item-code pattern for detecting codes in CAD text labels
@@ -196,8 +198,14 @@ Response JSON schema:
     const candLines = [`## Cross-Drawing Quantity Candidates (${candidates.length} total)`];
     candLines.push("Each line: code [dims] {flags} conf=X status=Y sources=[...] warnings=[...]");
     candLines.push("Flags: GENERIC_CODE | CONFLICT | OCR_ONLY | SUSPICIOUS_DIM | MISSING:fields");
-    for (const c of candidates) {
+    const included = candidates.slice(0, MAX_CANDIDATES_IN_PROMPT);
+    for (const c of included) {
       candLines.push(summariseCandidate(c));
+    }
+    if (candidates.length > included.length) {
+      candLines.push(
+        `  ... ${candidates.length - included.length} additional candidates omitted to keep prompt within safe runtime limits.`
+      );
     }
     sectionParts.push(candLines.join("\n"));
   } else {
@@ -232,8 +240,14 @@ Response JSON schema:
 
   // Candidate IDs for reference
   if (candidates.length > 0) {
-    const idMap = candidates.map(c => `  ${c.id} → ${c.normalizedItemCode || c.itemCode}`).join("\n");
-    sectionParts.push(`## Candidate ID Reference\n${idMap}`);
+    const idMap = candidates
+      .slice(0, MAX_CANDIDATE_IDS_IN_PROMPT)
+      .map(c => `  ${c.id} → ${c.normalizedItemCode || c.itemCode}`)
+      .join("\n");
+    const omitted = candidates.length - Math.min(candidates.length, MAX_CANDIDATE_IDS_IN_PROMPT);
+    sectionParts.push(
+      `## Candidate ID Reference\n${idMap}${omitted > 0 ? `\n  ... ${omitted} more candidate IDs omitted.` : ""}`
+    );
   }
 
   let userPrompt = sectionParts.join("\n\n");

@@ -109,7 +109,11 @@ import {
   type IntegrateDrawingIntelligenceResult,
 } from "@/services/drawing-intelligence/drawing-intelligence-integration.service";
 import { buildSystemEvidenceFromPackageData } from "@/services/drawing-intelligence/drawing-intelligence-system-mapper.service";
-import { canRunDrawingIntelligence } from "@/services/drawing-intelligence/drawing-intelligence-ui.utils";
+import {
+  canRunDrawingIntelligence,
+  DRAWING_INTELLIGENCE_RESULT_VERSION,
+  isDrawingIntelligenceResultStale,
+} from "@/services/drawing-intelligence/drawing-intelligence-ui.utils";
 import { runMockAiVisualDetection } from "@/services/drawing-intelligence/ai-visual-detection.service";
 import {
   computeAcceptAsCandidateResult,
@@ -182,6 +186,7 @@ interface DrawingIntelligenceActionFeedback {
 }
 
 interface DrawingIntelligencePreviewResult {
+  version: string;
   visualInput: AiVisualReviewInput;
   aiVisualResult: AiVisualDetectionResult;
   integration: IntegrateDrawingIntelligenceResult;
@@ -2481,6 +2486,7 @@ export default function DrawingPackageReviewTab({
       });
 
       setDrawingIntelligenceResult({
+        version: DRAWING_INTELLIGENCE_RESULT_VERSION,
         visualInput,
         aiVisualResult: visualGateway.result,
         integration,
@@ -2588,7 +2594,12 @@ export default function DrawingPackageReviewTab({
       },
       drawingSheets: [sheet],
     });
-    setDrawingIntelligenceResult({ visualInput, aiVisualResult, integration });
+    setDrawingIntelligenceResult({
+      version: DRAWING_INTELLIGENCE_RESULT_VERSION,
+      visualInput,
+      aiVisualResult,
+      integration,
+    });
     setDrawingIntelligenceError(null);
     setDrawingIntelligenceFeedback({
       kind: "success",
@@ -3442,6 +3453,7 @@ export default function DrawingPackageReviewTab({
           visualInput={drawingIntelligenceResult?.visualInput ?? null}
           aiResult={drawingIntelligenceResult?.aiVisualResult ?? null}
           integration={drawingIntelligenceResult?.integration ?? null}
+          resultIsStale={isDrawingIntelligenceResultStale(drawingIntelligenceResult?.version)}
           onLoadQaScenario={handleLoadDrawingIntelligenceQaScenario}
           showQaScenarioButton={process.env.NODE_ENV !== "production"}
           onAcceptAsCandidate={handleDrawingIntelligenceAcceptAsCandidate}

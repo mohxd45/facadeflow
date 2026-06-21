@@ -39,6 +39,7 @@ interface DrawingIntelligenceSectionProps {
   visualInput: AiVisualReviewInput | null;
   aiResult: AiVisualDetectionResult | null;
   integration: IntegrateDrawingIntelligenceResult | null;
+  resultIsStale: boolean;
   onLoadQaScenario?: () => void;
   showQaScenarioButton?: boolean;
   onAcceptAsCandidate: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
@@ -141,6 +142,7 @@ export default function DrawingIntelligenceSection({
   visualInput,
   aiResult,
   integration,
+  resultIsStale,
   onLoadQaScenario,
   showQaScenarioButton,
   onAcceptAsCandidate,
@@ -241,6 +243,12 @@ export default function DrawingIntelligenceSection({
       <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
         Actions are safe and non-final in this phase: no verified/final status is created from AI intelligence rows.
       </div>
+      {resultIsStale && rows.length > 0 && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+          <AlertTriangle className="inline h-3.5 w-3.5 mr-1" />
+          Drawing Intelligence result is from an older runtime version. Re-run Drawing Intelligence to refresh measurement linking.
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <div className="rounded-md border border-dashed border-slate-300 bg-slate-50 px-6 py-8 text-center space-y-2">

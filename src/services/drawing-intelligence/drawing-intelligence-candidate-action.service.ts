@@ -100,7 +100,14 @@ export function buildSafeTakeoffDraftFromReconciled(
       ? "draft"
       : "needs_verification";
 
+  const blockSuspiciousMeasurements =
+    element.measurementRejectedAsSuspicious === true ||
+    (element.unresolvedMeasurementReason ?? "").toLowerCase().includes("suspicious");
+
   const width =
+    blockSuspiciousMeasurements
+      ? undefined
+      :
     typeof element.systemDimensionDetection?.widthM === "number"
       ? element.systemDimensionDetection.widthM
       : typeof element.linkedMeasurement?.widthM === "number"
@@ -109,6 +116,9 @@ export function buildSafeTakeoffDraftFromReconciled(
         ? element.hintWidthM
         : undefined;
   const height =
+    blockSuspiciousMeasurements
+      ? undefined
+      :
     typeof element.systemDimensionDetection?.heightM === "number"
       ? element.systemDimensionDetection.heightM
       : typeof element.linkedMeasurement?.heightM === "number"
@@ -146,6 +156,9 @@ export function buildSafeTakeoffDraftFromReconciled(
       confidence: inferConfidence(element),
       warnings: [
         ...element.flaggedIssues,
+        ...(blockSuspiciousMeasurements
+          ? ["Suspicious dimension ignored — manual measurement required."]
+          : []),
         "Created from Drawing Intelligence — estimator verification required.",
       ],
       status,

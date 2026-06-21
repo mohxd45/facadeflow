@@ -62,29 +62,43 @@ async function callOpenAi(
   timeoutMs: number
 ): Promise<string> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let didTimeout = false;
+  const timer = setTimeout(() => {
+    didTimeout = true;
+    controller.abort();
+  }, timeoutMs);
 
   let resp: Response;
   try {
-    resp = await fetch("https://api.openai.com/v1/chat/completions", {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        response_format: { type: "json_object" },
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        // GPT-5-mini enforces default temperature; omit explicit override.
-        // GPT-5 family expects max_completion_tokens (not max_tokens).
-        max_completion_tokens: 4096,
-      }),
-    });
+    try {
+      resp = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          response_format: { type: "json_object" },
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          // GPT-5-mini enforces default temperature; omit explicit override.
+          // GPT-5 family expects max_completion_tokens (not max_tokens).
+          max_completion_tokens: 4096,
+        }),
+      });
+    } catch (err) {
+      if (didTimeout) {
+        throw new Error(`OpenAI request timed out after ${timeoutMs}ms`);
+      }
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error("OpenAI request was aborted before completion");
+      }
+      throw err;
+    }
   } finally {
     clearTimeout(timer);
   }
@@ -103,6 +117,20 @@ async function callOpenAi(
   }
   if (!content) throw new Error("OpenAI returned empty content");
   return content;
+}
+
+function classifyAiReviewFailureMessage(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("timed out")) {
+    return `timeout: ${message}`;
+  }
+  if (lower.includes("aborted")) {
+    return `request aborted: ${message}`;
+  }
+  if (lower.includes("api error")) {
+    return `provider error: ${message}`;
+  }
+  return `provider error: ${message}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +303,8 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   }
 
   // Build the prompt (server-side, structured text only)
-  const { systemPrompt, userPrompt } = buildAiReviewPrompt(input, maxInputChars);
+  const prompt = buildAiReviewPrompt(input, maxInputChars);
+  const { systemPrompt, userPrompt } = prompt;
 
   const candidateIds = new Set(
     (input.crossDrawingResult?.candidates ?? []).map(c => c.id)
@@ -284,6 +313,11 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
   try {
     const rawResponse = await callOpenAi(systemPrompt, userPrompt, model, apiKey, timeoutMs);
     const result = parseLlmResponse(rawResponse, input.projectId, candidateIds);
+    if (prompt.truncated) {
+      result.warnings.unshift(
+        `AI prompt was trimmed to ${prompt.inputCharCount} chars for runtime safety.`
+      );
+    }
     result.runtimeMeta = {
       source: "openai",
       modelUsed: model,
@@ -292,9 +326,15 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown AI error";
+    const failureReason = classifyAiReviewFailureMessage(message);
     // On failure, fall back to mock and include a warning
     const fallback = runMockAiDrawingReview(input);
-    fallback.warnings.unshift(`Real AI call failed (${message}). Showing mock results.`);
+    fallback.warnings.unshift(`Real AI call failed (${failureReason}). Showing mock results.`);
+    if (prompt.truncated) {
+      fallback.warnings.unshift(
+        `AI prompt was trimmed to ${prompt.inputCharCount} chars for runtime safety.`
+      );
+    }
     fallback.runtimeMeta = {
       source: "mock_fallback",
       modelUsed: model,

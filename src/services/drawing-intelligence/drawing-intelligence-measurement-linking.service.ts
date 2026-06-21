@@ -210,6 +210,7 @@ export function linkMeasurementsToReconciledElements(
     if (!best || best.score < 55 || (code.length > 0 && best.codeScore === 0)) {
       out.unresolvedMeasurementReason =
         "No safe dimension could be linked to this element.";
+      out.measurementRejectedAsSuspicious = false;
       unresolved.push({
         elementId: out.id,
         reason: out.unresolvedMeasurementReason,
@@ -224,6 +225,7 @@ export function linkMeasurementsToReconciledElements(
     if (isSuspiciousMeasurement(best.dim, best.codeScore)) {
       out.unresolvedMeasurementReason =
         "Suspicious measurement detected and rejected.";
+      out.measurementRejectedAsSuspicious = true;
       unresolved.push({
         elementId: out.id,
         reason: out.unresolvedMeasurementReason,
@@ -237,6 +239,8 @@ export function linkMeasurementsToReconciledElements(
         ...out.flaggedIssues,
         "Suspicious measurement rejected — estimator verification required.",
       ];
+      out.hintWidthM = undefined;
+      out.hintHeightM = undefined;
       if (out.matchStatus === "matched" || out.matchStatus === "system_only") {
         out.matchStatus = "needs_verification";
       }
@@ -250,6 +254,7 @@ export function linkMeasurementsToReconciledElements(
         : "Linked by same-sheet nearest safe dimension method."
     );
     out.linkedMeasurement = linked;
+    out.measurementRejectedAsSuspicious = false;
 
     // Set hints from linked measurement, but never overwrite existing explicit system dimensions.
     if (typeof out.systemDimensionDetection?.widthM === "number") {

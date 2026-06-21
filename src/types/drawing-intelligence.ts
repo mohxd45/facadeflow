@@ -295,6 +295,8 @@ export interface ReconciledElement {
   linkedMeasurement?: LinkedMeasurementEvidence;
   /** Why no safe measurement could be linked. */
   unresolvedMeasurementReason?: string;
+  /** True when a candidate measurement was explicitly rejected as suspicious/noise. */
+  measurementRejectedAsSuspicious?: boolean;
 
   // ── Estimator action items ────────────────────────────────────────────────
   /** Human-readable list of issues the estimator should review. */

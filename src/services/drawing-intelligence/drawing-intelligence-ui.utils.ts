@@ -30,6 +30,12 @@ export interface DrawingIntelligenceRow {
   source: string;
 }
 
+export const DRAWING_INTELLIGENCE_RESULT_VERSION = "6g-b-runtime-1";
+
+export function isDrawingIntelligenceResultStale(version?: string): boolean {
+  return version !== DRAWING_INTELLIGENCE_RESULT_VERSION;
+}
+
 export function canRunDrawingIntelligence(
   runBusy: boolean,
   analysisStatus: "idle" | "running" | "done" | "error"
@@ -67,6 +73,31 @@ function fmt(n: number | undefined): string {
   return Number.isInteger(n) ? String(n) : n.toFixed(2);
 }
 
+function measurementDisplay(
+  row: ReconciledElement
+): { width: string; height: string; note?: string } {
+  const suspicious =
+    row.measurementRejectedAsSuspicious === true ||
+    (row.unresolvedMeasurementReason ?? "").toLowerCase().includes("suspicious");
+  if (suspicious) {
+    return { width: "-", height: "-", note: "Suspicious dimension ignored" };
+  }
+
+  if (row.linkedMeasurement) {
+    return {
+      width: fmt(row.hintWidthM),
+      height: fmt(row.hintHeightM),
+      note: `Linked by ${row.linkedMeasurement.detectionMethod}`,
+    };
+  }
+
+  if (row.unresolvedMeasurementReason) {
+    return { width: "-", height: "-", note: "Dimension missing" };
+  }
+
+  return { width: fmt(row.hintWidthM), height: fmt(row.hintHeightM) };
+}
+
 function inferType(row: ReconciledElement): string {
   if (row.inferredType) return String(row.inferredType);
   if (row.systemCodeDetection?.normalizedCode) return "system_coded_element";
@@ -84,17 +115,24 @@ export function toDrawingIntelligenceRows(
         row.aiDetection?.detectionType ??
         "-";
       const recommendedAction = row.recommendedEstimatorAction ?? "review_manually";
+      const dims = measurementDisplay(row);
+      const notes = [
+        ...row.flaggedIssues,
+        ...(dims.note ? [dims.note] : []),
+      ]
+        .filter((n) => n.trim().length > 0)
+        .join(" | ");
       return {
         id: row.id,
         elementType: inferType(row),
         code,
-        width: fmt(row.hintWidthM),
-        height: fmt(row.hintHeightM),
+        width: dims.width,
+        height: dims.height,
         confidence: row.confidence,
         status: row.matchStatus,
         recommendedAction,
         sheetRef: `${sheet.sheet.drawingName} / page ${sheet.sheet.page}`,
-        notes: row.flaggedIssues.join(" | ") || "-",
+        notes: notes || "-",
         source: row.systemCodeDetection ? "system+ai" : row.aiDetection ? "ai_visual" : "system",
       };
     })
