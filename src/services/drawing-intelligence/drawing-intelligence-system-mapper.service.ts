@@ -110,15 +110,24 @@ export function buildSystemEvidenceFromPackageData(
         typeof c.height === "number" ||
         typeof c.length === "number"
       ) {
+        const fromScheduleLike =
+          c.widthSource?.sourceType === "schedule" ||
+          c.heightSource?.sourceType === "schedule";
         row.dimensionDetections.push({
           id: `sys-dim-${c.id}-${drawing.id}-${page}`,
           sheet,
-          rawText: `${c.width ?? "?"}x${c.height ?? "?"}`,
+          rawText: `${c.normalizedItemCode || c.itemCode} = ${c.width ?? "?"}x${c.height ?? "?"}`,
           widthM: typeof c.width === "number" ? c.width : null,
           heightM: typeof c.height === "number" ? c.height : null,
           lengthM: typeof c.length === "number" ? c.length : null,
           confidence: c.confidence,
           source: sourceTypeToDimSource(c.widthSource?.sourceType ?? c.heightSource?.sourceType),
+          detectionMethod: fromScheduleLike ? "schedule" : "text_pair",
+          nearbyCodeRef: c.normalizedItemCode || c.itemCode,
+          unit: "m",
+          reason: fromScheduleLike
+            ? "Dimension extracted from schedule/source-priority mapping."
+            : "Dimension extracted from candidate text pairing.",
           detectedAt: now,
         });
       }
@@ -167,6 +176,15 @@ export function buildSystemEvidenceFromPackageData(
           lengthM: typeof c.length === "number" ? c.length : null,
           confidence: c.confidence,
           source: sourceTypeToDimSource(c.sourceType),
+          detectionMethod:
+            c.sourceType === "drawing_schedule"
+              ? "table"
+              : c.sourceType === "dxf_geometry"
+                ? "cad_geometry"
+                : "nearby_dimension",
+          nearbyCodeRef: c.itemCode,
+          unit: "m",
+          reason: "Dimension inferred from package evidence candidate.",
           detectedAt: now,
         });
       }

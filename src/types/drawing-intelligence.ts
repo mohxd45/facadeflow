@@ -94,8 +94,53 @@ export interface SystemDimensionDetection {
   lengthM: number | null;
   confidence: "high" | "medium" | "low";
   source: "pdf_text" | "ocr_text" | "dxf_dimension_entity" | "dxf_text";
+  /**
+   * How this measurement was detected.
+   * Used by measurement-linking confidence ranking and suspicious filtering.
+   */
+  detectionMethod?:
+    | "schedule"
+    | "table"
+    | "nearby_dimension"
+    | "text_pair"
+    | "cad_geometry"
+    | "manual";
+  /** Optional code reference found near this measurement (e.g. W-01). */
+  nearbyCodeRef?: string;
+  /** Measurement unit before normalization where known (mm, cm, m, ft, in). */
+  unit?: "mm" | "cm" | "m" | "ft" | "in";
+  /** Optional explanation why parser considered this measurement valid. */
+  reason?: string;
   region?: DrawingRegion;
   detectedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 6G: Measurement extraction/linking evidence
+// ---------------------------------------------------------------------------
+
+export interface LinkedMeasurementEvidence {
+  id: string;
+  sheet: DrawingSheetRef;
+  rawText: string;
+  widthM?: number;
+  heightM?: number;
+  lengthM?: number;
+  areaSqm?: number;
+  count?: number;
+  unit?: "mm" | "cm" | "m" | "ft" | "in" | "sqm" | "lm" | "nos";
+  sourceFormat: DrawingSourceFormat;
+  confidence: "high" | "medium" | "low";
+  reason: string;
+  nearbyCodeRef?: string;
+  detectionMethod:
+    | "schedule"
+    | "table"
+    | "nearby_dimension"
+    | "text_pair"
+    | "cad_geometry"
+    | "manual";
+  suspicious: boolean;
 }
 
 /** Structural evidence from a DXF layer or block. */
@@ -246,6 +291,10 @@ export interface ReconciledElement {
   hintWidthM?: number;
   /** Best height estimate combining system dimension + AI hint (metres). */
   hintHeightM?: number;
+  /** Linked measurement evidence chosen by Phase 6G linker (if any). */
+  linkedMeasurement?: LinkedMeasurementEvidence;
+  /** Why no safe measurement could be linked. */
+  unresolvedMeasurementReason?: string;
 
   // ── Estimator action items ────────────────────────────────────────────────
   /** Human-readable list of issues the estimator should review. */

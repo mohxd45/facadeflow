@@ -23,9 +23,11 @@ import type {
   DrawingSheetRef,
   ReconciledElement,
   ReconciliationInput,
+  SystemDimensionDetection,
   SystemSheetEvidence,
 } from "@/types/drawing-intelligence";
 import { reconcileDrawingIntelligence } from "@/services/drawing-intelligence/drawing-intelligence-reconciler.service";
+import { linkMeasurementsToReconciledElements } from "@/services/drawing-intelligence/drawing-intelligence-measurement-linking.service";
 
 export interface ExistingCandidateReference {
   candidateId: string;
@@ -222,7 +224,22 @@ export function integrateAiSystemDrawingReconciliation(
 
   const base = reconcileDrawingIntelligence(reconciliationInput);
   const reconciliations = base.map((sheetResult) => {
-    const processed = postProcessSafety(sheetResult.reconciledElements);
+    const prelim = postProcessSafety(sheetResult.reconciledElements);
+    const systemDims: SystemDimensionDetection[] = sysMapped.evidence.flatMap(
+      (s) => s.dimensionDetections
+    );
+    const measurementLinked = linkMeasurementsToReconciledElements({
+      systemCodeDetections: sysMapped.evidence.flatMap((s) => s.codeDetections),
+      systemDimensionDetections: systemDims,
+      aiDetections: input.aiVisualDetectionResult.detections,
+      reconciledElements: prelim,
+      sheetRefs: fallbackSheets,
+    });
+    const processed = measurementLinked.elements;
+    warnings.push(
+      ...measurementLinked.unresolved.map((x) => `Measurement unresolved (${x.elementId}): ${x.reason}`),
+      ...measurementLinked.suspicious.map((x) => `Suspicious measurement (${x.elementId}): ${x.reason}`)
+    );
     return {
       ...sheetResult,
       reconciledElements: processed,

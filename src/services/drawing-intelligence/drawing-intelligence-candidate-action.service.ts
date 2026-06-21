@@ -103,12 +103,16 @@ export function buildSafeTakeoffDraftFromReconciled(
   const width =
     typeof element.systemDimensionDetection?.widthM === "number"
       ? element.systemDimensionDetection.widthM
+      : typeof element.linkedMeasurement?.widthM === "number"
+        ? element.linkedMeasurement.widthM
       : typeof element.hintWidthM === "number"
         ? element.hintWidthM
         : undefined;
   const height =
     typeof element.systemDimensionDetection?.heightM === "number"
       ? element.systemDimensionDetection.heightM
+      : typeof element.linkedMeasurement?.heightM === "number"
+        ? element.linkedMeasurement.heightM
       : typeof element.hintHeightM === "number"
         ? element.hintHeightM
         : undefined;
