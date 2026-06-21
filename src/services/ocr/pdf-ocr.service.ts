@@ -71,7 +71,14 @@ function isBrowserEnvironment(): boolean {
 let pdfjsInitialised = false;
 
 async function getPdfjs() {
-  const pdfjs = await import("pdfjs-dist");
+  let pdfjs: typeof import("pdfjs-dist");
+  try {
+    // Legacy bundle avoids modern runtime helpers that are unavailable in some
+    // embedded browser environments used during local QA automation.
+    pdfjs = (await import("pdfjs-dist/legacy/build/pdf.mjs")) as typeof import("pdfjs-dist");
+  } catch {
+    pdfjs = await import("pdfjs-dist");
+  }
   if (!pdfjsInitialised) {
     // Keep OCR render path aligned with package review extractor setup.
     pdfjs.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs";
