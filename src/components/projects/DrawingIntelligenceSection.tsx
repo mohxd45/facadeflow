@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useCallback } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -26,6 +26,7 @@ import type {
 import type { IntegrateDrawingIntelligenceResult } from "@/services/drawing-intelligence/drawing-intelligence-integration.service";
 import {
   computeDrawingIntelligenceStats,
+  type DrawingIntelligenceRow,
   toDrawingIntelligenceRows,
 } from "@/services/drawing-intelligence/drawing-intelligence-ui.utils";
 
@@ -40,16 +41,96 @@ interface DrawingIntelligenceSectionProps {
   integration: IntegrateDrawingIntelligenceResult | null;
   onLoadQaScenario?: () => void;
   showQaScenarioButton?: boolean;
+  onAcceptAsCandidate: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
+  onSendToMissingInfo: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
+  onCreateClarification: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
+  onRejectSuggestion: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
+  onResolveConflict: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
+  onReviewManually: (rowId: string) => Promise<{ kind: "success" | "warning" | "error"; message: string }>;
 }
 
-const ACTION_PLACEHOLDERS = [
-  "Accept as Candidate",
-  "Send to Missing Info",
-  "Create Clarification",
-  "Reject Suggestion",
-  "Resolve Conflict",
-  "Review Manually",
-] as const;
+type RowFeedback = { kind: "success" | "warning" | "error"; message: string };
+
+function RowActionCell({
+  row,
+  onAcceptAsCandidate,
+  onSendToMissingInfo,
+  onCreateClarification,
+  onRejectSuggestion,
+  onResolveConflict,
+  onReviewManually,
+}: {
+  row: DrawingIntelligenceRow;
+  onAcceptAsCandidate: (rowId: string) => Promise<RowFeedback>;
+  onSendToMissingInfo: (rowId: string) => Promise<RowFeedback>;
+  onCreateClarification: (rowId: string) => Promise<RowFeedback>;
+  onRejectSuggestion: (rowId: string) => Promise<RowFeedback>;
+  onResolveConflict: (rowId: string) => Promise<RowFeedback>;
+  onReviewManually: (rowId: string) => Promise<RowFeedback>;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [feedback, setFeedback] = useState<RowFeedback | null>(null);
+
+  const run = useCallback(
+    async (fn: () => Promise<RowFeedback>) => {
+      if (busy) return;
+      setBusy(true);
+      setFeedback(null);
+      try {
+        const result = await fn();
+        setFeedback(result);
+      } catch {
+        setFeedback({ kind: "error", message: "Action failed unexpectedly." });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy]
+  );
+
+  return (
+    <div className="space-y-1">
+      <div className="flex flex-wrap gap-1">
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" disabled={busy} onClick={() => run(() => onAcceptAsCandidate(row.id))}>
+          Accept as Candidate
+        </Button>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" disabled={busy} onClick={() => run(() => onSendToMissingInfo(row.id))}>
+          Send to Missing Info
+        </Button>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" disabled={busy} onClick={() => run(() => onCreateClarification(row.id))}>
+          Create Clarification
+        </Button>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" disabled={busy} onClick={() => run(() => onRejectSuggestion(row.id))}>
+          Reject Suggestion
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 px-2 text-[10px]"
+          disabled={busy || row.status !== "conflict"}
+          onClick={() => run(() => onResolveConflict(row.id))}
+        >
+          Resolve Conflict
+        </Button>
+        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" disabled={busy} onClick={() => run(() => onReviewManually(row.id))}>
+          Review Manually
+        </Button>
+      </div>
+      {feedback && (
+        <p
+          className={cn(
+            "text-[10px]",
+            feedback.kind === "success" && "text-green-700",
+            feedback.kind === "warning" && "text-amber-700",
+            feedback.kind === "error" && "text-red-700"
+          )}
+        >
+          {feedback.message}
+        </p>
+      )}
+    </div>
+  );
+}
 
 export default function DrawingIntelligenceSection({
   analysisStatus,
@@ -62,6 +143,12 @@ export default function DrawingIntelligenceSection({
   integration,
   onLoadQaScenario,
   showQaScenarioButton,
+  onAcceptAsCandidate,
+  onSendToMissingInfo,
+  onCreateClarification,
+  onRejectSuggestion,
+  onResolveConflict,
+  onReviewManually,
 }: DrawingIntelligenceSectionProps) {
   const rows = useMemo(
     () => toDrawingIntelligenceRows(integration?.reconciliations ?? []),
@@ -151,22 +238,8 @@ export default function DrawingIntelligenceSection({
         ))}
       </div>
 
-      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-        <p className="text-[11px] font-medium text-slate-700 mb-2">Action placeholders (non-destructive in Phase 6E):</p>
-        <div className="flex flex-wrap gap-1.5">
-          {ACTION_PLACEHOLDERS.map((label) => (
-            <Button
-              key={label}
-              size="sm"
-              variant="outline"
-              disabled
-              className="h-6 px-2 text-[10px]"
-              title="Placeholder action — backend wiring comes in later phase"
-            >
-              {label}
-            </Button>
-          ))}
-        </div>
+      <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-700">
+        Actions are safe and non-final in this phase: no verified/final status is created from AI intelligence rows.
       </div>
 
       {rows.length === 0 ? (
@@ -190,6 +263,7 @@ export default function DrawingIntelligenceSection({
                 <TableHead>Recommended Action</TableHead>
                 <TableHead>Sheet / Source</TableHead>
                 <TableHead>Notes</TableHead>
+                <TableHead>Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -221,6 +295,17 @@ export default function DrawingIntelligenceSection({
                     <div className="text-[10px] text-slate-500">{row.source}</div>
                   </TableCell>
                   <TableCell className="text-xs max-w-[320px]">{row.notes}</TableCell>
+                  <TableCell className="text-xs min-w-[320px]">
+                    <RowActionCell
+                      row={row}
+                      onAcceptAsCandidate={onAcceptAsCandidate}
+                      onSendToMissingInfo={onSendToMissingInfo}
+                      onCreateClarification={onCreateClarification}
+                      onRejectSuggestion={onRejectSuggestion}
+                      onResolveConflict={onResolveConflict}
+                      onReviewManually={onReviewManually}
+                    />
+                  </TableCell>
                 </TableRow>
               ))}
             </TableBody>

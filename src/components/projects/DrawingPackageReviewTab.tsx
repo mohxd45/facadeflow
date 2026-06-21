@@ -112,6 +112,13 @@ import { buildSystemEvidenceFromPackageData } from "@/services/drawing-intellige
 import { canRunDrawingIntelligence } from "@/services/drawing-intelligence/drawing-intelligence-ui.utils";
 import { runMockAiVisualDetection } from "@/services/drawing-intelligence/ai-visual-detection.service";
 import {
+  computeAcceptAsCandidateResult,
+  computeCreateClarificationResult,
+  computeCreateMissingInfoResult,
+  rejectSuggestionSafely,
+  type DrawingIntelligenceActionResult,
+} from "@/services/drawing-intelligence/drawing-intelligence-candidate-action.service";
+import {
   buildMissingInfoInputFromFinding,
   isMissingInfoDuplicate,
   buildClarificationDraft,
@@ -1467,6 +1474,9 @@ export default function DrawingPackageReviewTab({
   const [drawingIntelligenceError, setDrawingIntelligenceError] = useState<string | null>(null);
   const [drawingIntelligenceFeedback, setDrawingIntelligenceFeedback] =
     useState<DrawingIntelligenceActionFeedback | null>(null);
+  const [drawingIntelligenceRejectedIds, setDrawingIntelligenceRejectedIds] = useState<
+    Record<string, true>
+  >({});
 
   const projectAiReviewResult = useMemo(
     () => aiReviewResultsByProject[projectId] ?? null,
@@ -2587,6 +2597,141 @@ export default function DrawingPackageReviewTab({
     setActiveSection("drawingIntelligence");
   }, [projectId]);
 
+  const toDrawingIntelligenceFeedback = useCallback(
+    (result: DrawingIntelligenceActionResult): DrawingIntelligenceActionFeedback => {
+      const kind =
+        result.outcome === "created" || result.outcome === "acknowledged"
+          ? "success"
+          : result.outcome === "duplicate" || result.outcome === "blocked"
+            ? "warning"
+            : "error";
+      return { kind, message: result.message };
+    },
+    []
+  );
+
+  const getDrawingIntelligenceElementById = useCallback(
+    (rowId: string) =>
+      drawingIntelligenceResult?.integration.reconciliations
+        .flatMap((r) => r.reconciledElements)
+        .find((e) => e.id === rowId) ?? null,
+    [drawingIntelligenceResult]
+  );
+
+  const handleDrawingIntelligenceAcceptAsCandidate = useCallback(
+    async (rowId: string) => {
+      const element = getDrawingIntelligenceElementById(rowId);
+      if (!element) {
+        return {
+          kind: "error" as const,
+          message: "Reconciled element not found. Re-run Drawing Intelligence.",
+        };
+      }
+      const existing = allTakeoffItems.filter((i) => i.projectId === projectId);
+      const { result, input } = computeAcceptAsCandidateResult(element, projectId, existing);
+      if (input) {
+        await addTakeoffItems([input]);
+      }
+      return toDrawingIntelligenceFeedback(result);
+    },
+    [addTakeoffItems, allTakeoffItems, getDrawingIntelligenceElementById, projectId, toDrawingIntelligenceFeedback]
+  );
+
+  const handleDrawingIntelligenceSendToMissingInfo = useCallback(
+    async (rowId: string) => {
+      const element = getDrawingIntelligenceElementById(rowId);
+      if (!element) {
+        return {
+          kind: "error" as const,
+          message: "Reconciled element not found. Re-run Drawing Intelligence.",
+        };
+      }
+      const { result, input } = computeCreateMissingInfoResult(element, projectId, projectIssues);
+      if (input) {
+        await addIssues([input]);
+      }
+      return toDrawingIntelligenceFeedback(result);
+    },
+    [addIssues, getDrawingIntelligenceElementById, projectId, projectIssues, toDrawingIntelligenceFeedback]
+  );
+
+  const handleDrawingIntelligenceCreateClarification = useCallback(
+    async (rowId: string) => {
+      const element = getDrawingIntelligenceElementById(rowId);
+      if (!element) {
+        return {
+          kind: "error" as const,
+          message: "Reconciled element not found. Re-run Drawing Intelligence.",
+        };
+      }
+      const { result, input } = computeCreateClarificationResult(element, projectId, projectIssues);
+      if (input) {
+        await addIssues([input]);
+      }
+      return toDrawingIntelligenceFeedback(result);
+    },
+    [addIssues, getDrawingIntelligenceElementById, projectId, projectIssues, toDrawingIntelligenceFeedback]
+  );
+
+  const handleDrawingIntelligenceRejectSuggestion = useCallback(
+    async (rowId: string) => {
+      if (drawingIntelligenceRejectedIds[rowId]) {
+        return {
+          kind: "warning" as const,
+          message: "Suggestion already marked as rejected in this session.",
+        };
+      }
+      const element = getDrawingIntelligenceElementById(rowId);
+      if (!element) {
+        return {
+          kind: "error" as const,
+          message: "Reconciled element not found. Re-run Drawing Intelligence.",
+        };
+      }
+      setDrawingIntelligenceRejectedIds((prev) => ({ ...prev, [rowId]: true }));
+      return toDrawingIntelligenceFeedback(rejectSuggestionSafely(element));
+    },
+    [drawingIntelligenceRejectedIds, getDrawingIntelligenceElementById, toDrawingIntelligenceFeedback]
+  );
+
+  const handleDrawingIntelligenceResolveConflict = useCallback(
+    async (rowId: string) => {
+      const element = getDrawingIntelligenceElementById(rowId);
+      if (!element) {
+        return {
+          kind: "error" as const,
+          message: "Reconciled element not found. Re-run Drawing Intelligence.",
+        };
+      }
+      if (element.matchStatus !== "conflict") {
+        return {
+          kind: "warning" as const,
+          message: "Resolve Conflict is only available for conflict rows.",
+        };
+      }
+      const { result, input } = computeCreateMissingInfoResult(element, projectId, projectIssues);
+      if (input) {
+        await addIssues([input]);
+      }
+      const base = toDrawingIntelligenceFeedback(result);
+      return {
+        kind: base.kind,
+        message:
+          result.outcome === "created"
+            ? "Conflict escalated to Missing Info for estimator review."
+            : base.message,
+      };
+    },
+    [addIssues, getDrawingIntelligenceElementById, projectId, projectIssues, toDrawingIntelligenceFeedback]
+  );
+
+  const handleDrawingIntelligenceReviewManually = useCallback(async () => {
+    return {
+      kind: "warning" as const,
+      message: "Manual review noted. No quantity data was changed.",
+    };
+  }, []);
+
   const handleAiViewCandidate = useCallback((candidateId: string) => {
     const candidate = getCrossDrawingCandidateById(candidateId);
     if (!candidate) {
@@ -3299,6 +3444,12 @@ export default function DrawingPackageReviewTab({
           integration={drawingIntelligenceResult?.integration ?? null}
           onLoadQaScenario={handleLoadDrawingIntelligenceQaScenario}
           showQaScenarioButton={process.env.NODE_ENV !== "production"}
+          onAcceptAsCandidate={handleDrawingIntelligenceAcceptAsCandidate}
+          onSendToMissingInfo={handleDrawingIntelligenceSendToMissingInfo}
+          onCreateClarification={handleDrawingIntelligenceCreateClarification}
+          onRejectSuggestion={handleDrawingIntelligenceRejectSuggestion}
+          onResolveConflict={handleDrawingIntelligenceResolveConflict}
+          onReviewManually={handleDrawingIntelligenceReviewManually}
         />
       )}
 
